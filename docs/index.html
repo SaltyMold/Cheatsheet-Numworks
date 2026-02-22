@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Image converter</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-window">
+    <input id="file" type="file" accept="image/*" style="display:none">
+
+    <main class="workspace">
+      <aside class="sidebar left">
+        <section>
+          <h4>File</h4>
+          <button id="openBtn">Open</button>
+          <button id="undoBtn" title="Undo (Ctrl+Z)">Undo</button>
+          <button id="redoBtn" title="Redo">Redo</button>
+        </section>
+        <section>
+          <h4>Tools</h4>
+          <button id="rotateBtn">Rotate 90°</button>
+          <button id="rotateCustomBtn">Rotate</button><br>
+          <button id="flipHBtn">Flip H</button>
+          <button id="flipVBtn">Flip V</button>
+          <button id="cropBtn">Crop</button>
+        </section>
+        <section>
+          <h4>Colors</h4>
+          <label>Colors: <span id="colorsVal">16</span></label>
+          <input id="colors" type="range" min="2" max="16" value="16"><br>
+          <label><input id="invert" type="checkbox"> Invert</label>
+        </section>
+      </aside>
+
+      <section class="canvases">
+        <div class="pane">
+          <h3>Original / Edit <span id="origSize" class="size-badge">—</span></h3>
+          <div class="orig-wrap"><canvas id="orig" width="640" height="480"></canvas></div>
+          <!-- hint removed; crop now opens modal dialog -->
+        </div>
+        <div class="pane">
+          <h3>Preview (quantized) <span class="size-badge">1280×960</span></h3>
+          <div class="preview-wrap">
+            <canvas id="preview" width="1280" height="960"></canvas>
+            <canvas id="lens" width="200" height="200" class="lens" aria-hidden="true"></canvas>
+          </div>
+        </div>
+      </section>
+      <aside class="sidebar right">
+        <section>
+          <h4>Export</h4>
+          <button id="downloadBtn">Export .bin</button><br>
+          <button id="downloadPreviewBtn">Export PNG (preview)</button>
+          <div class="note">Binary size: <strong id="binSize">0</strong></div>
+        </section>
+      </aside>
+    </main>
+    <!-- Crop modal -->
+    <div id="cropModal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop"></div>
+      <div class="modal-panel">
+        <h3>Crop image</h3>
+        <div class="modal-body">
+          <canvas id="cropCanvas"></canvas>
+        </div>
+        <div class="modal-actions">
+          <button id="cropConfirm">Apply Crop</button>
+          <button id="cropCancel">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Rotate modal -->
+    <div id="rotateModal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop"></div>
+      <div class="modal-panel">
+        <h3>Rotate image</h3>
+        <div class="modal-body">
+          <canvas id="rotateCanvas"></canvas>
+        </div>
+        <div class="modal-controls">
+          <label>Angle: <span id="rotateAngleVal">0</span>°</label>
+          <input id="rotateAngle" type="range" min="-180" max="180" value="0" step="1" style="width:100%;">
+        </div>
+        <div class="modal-actions">
+          <button id="rotateConfirm">Apply Rotate</button>
+          <button id="rotateCancel">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
