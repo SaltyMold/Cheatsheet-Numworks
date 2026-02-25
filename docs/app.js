@@ -21,6 +21,8 @@
   const colorsRange = document.getElementById('colors');
   const colorsVal = document.getElementById('colorsVal');
   const invertChk = document.getElementById('invert');
+  const sizeRange = document.getElementById('sizeRange');
+  const sizeVal = document.getElementById('sizeVal');
   const downloadBtn = document.getElementById('downloadBtn');
   const downloadPreviewBtn = document.getElementById('downloadPreviewBtn');
   const undoBtn = document.getElementById('undoBtn');
@@ -36,6 +38,17 @@
   const LENS_SIZE = lens ? lens.width : 200;
   const LENS_ZOOM = 2.5;
   const openBtn = document.getElementById('openBtn');
+
+  if(sizeRange && sizeVal) sizeVal.textContent = sizeRange.value;
+  let previewDisplayScale = 1; // display scale of preview (internal px -> CSS px)
+  let previewSizeEl = document.getElementById('previewSize');
+
+  // preview size badge element (displayed next to "Preview (quantized)")
+  if (!previewSizeEl) {
+      previewSizeEl = document.createElement('span');
+      previewSizeEl.id = 'previewSize';
+      previewWrap.appendChild(previewSizeEl);
+  }
 
   function clientToCanvasPreview(clientX, clientY){
     const r = prev.getBoundingClientRect();
@@ -71,7 +84,8 @@
             const it = stack[i];
             if(!it || !it.src) continue;
             // only include reasonably-sized data URLs (skip huge ones)
-            if(it.src.length > 500000) continue;
+            // allow larger threshold because we store as JPEG where possible
+            if(it.src.length > 900000) continue;
             out.push({ src: it.src, w: it.w, h: it.h, originalIntrinsic: it.originalIntrinsic });
           }
           return out;
@@ -79,10 +93,12 @@
       }
 
       const data = {
-        image: orig.toDataURL(),
+        // use JPEG for session image to reduce size and increase chance of saving
+        image: (function(){ try{ return orig.toDataURL('image/jpeg', 0.8); }catch(e){ return orig.toDataURL(); } })(),
         state: { w: state.w, h: state.h },
         originalIntrinsic: originalIntrinsic,
         colors: colorsRange ? colorsRange.value : null,
+          size: sizeRange ? sizeRange.value : null,
         invert: invertChk ? invertChk.checked : false,
         history: serializeStack(history),
         redoStack: serializeStack(redoStack),
@@ -124,6 +140,8 @@
         drawImageToOrig();
         if(colorsRange && data.colors) colorsRange.value = data.colors;
         if(colorsVal) colorsVal.textContent = colorsRange.value;
+        if(sizeRange && data.size) sizeRange.value = data.size;
+        if(sizeVal) sizeVal.textContent = sizeRange ? sizeRange.value : '4';
         if(invertChk) invertChk.checked = !!data.invert;
         updatePreview();
         if(prev) prev.classList.remove('hidden');
@@ -138,7 +156,10 @@
   function pushHistory(){
     try{
       if(!img.src) return;
-      history.push({src: orig.toDataURL(), w: state.w, h: state.h, originalIntrinsic: originalIntrinsic});
+      // use JPEG output for history to reduce data URL size for localStorage
+      var dataUrl;
+      try{ dataUrl = orig.toDataURL('image/jpeg', 0.8); }catch(e){ dataUrl = orig.toDataURL(); }
+      history.push({src: dataUrl, w: state.w, h: state.h, originalIntrinsic: originalIntrinsic});
       // push a new state clears the redo stack
       redoStack.length = 0;
       if(history.length>12) history.shift();
@@ -309,6 +330,17 @@
       modalSel = { x: x, y: y, w: 0, h: 0 };
       modalDragging = true;
     });
+    // Touch support for mobile: start selection
+    mc.addEventListener('touchstart', e=>{
+      if(!e.touches || e.touches.length===0) return;
+      const t = e.touches[0];
+      const r = mc.getBoundingClientRect();
+      const x = (t.clientX - r.left);
+      const y = (t.clientY - r.top);
+      modalSel = { x: x, y: y, w: 0, h: 0 };
+      modalDragging = true;
+      e.preventDefault();
+    }, { passive: false });
     window.addEventListener('mousemove', e=>{
       if(!modalDragging) return;
       const r = mc.getBoundingClientRect();
@@ -317,6 +349,18 @@
       modalSel.w = x - modalSel.x; modalSel.h = y - modalSel.y;
       redrawModal();
     });
+    // Touch move support while dragging selection
+    window.addEventListener('touchmove', e=>{
+      if(!modalDragging) return;
+      if(!e.touches || e.touches.length===0) return;
+      const t = e.touches[0];
+      const r = mc.getBoundingClientRect();
+      const x = (t.clientX - r.left);
+      const y = (t.clientY - r.top);
+      modalSel.w = x - modalSel.x; modalSel.h = y - modalSel.y;
+      redrawModal();
+      e.preventDefault();
+    }, { passive: false });
     window.addEventListener('mouseup', e=>{
       if(!modalDragging) return; modalDragging = false;
       if(!modalSel) return;
@@ -330,6 +374,21 @@
       if(modalSel.w < 4 || modalSel.h < 4) modalSel = null;
       redrawModal();
     });
+    // Touch end support to finish selection
+    window.addEventListener('touchend', e=>{
+      if(!modalDragging) return; modalDragging = false;
+      if(!modalSel) return;
+      if(modalSel.w<0){ modalSel.x += modalSel.w; modalSel.w = -modalSel.w; }
+      if(modalSel.h<0){ modalSel.y += modalSel.h; modalSel.h = -modalSel.h; }
+      // clamp
+      modalSel.x = Math.max(0, Math.min(modalSel.x, mc.width));
+      modalSel.y = Math.max(0, Math.min(modalSel.y, mc.height));
+      modalSel.w = Math.max(0, Math.min(modalSel.w, mc.width - modalSel.x));
+      modalSel.h = Math.max(0, Math.min(modalSel.h, mc.height - modalSel.y));
+      if(modalSel.w < 4 || modalSel.h < 4) modalSel = null;
+      redrawModal();
+      e.preventDefault();
+    }, { passive: false });
   }
 
   // modal controls
@@ -568,13 +627,18 @@ if (rotateConfirm) {
   // save palette/invert changes to session
   if(colorsRange) colorsRange.addEventListener('change', saveSession);
   if(invertChk) invertChk.addEventListener('change', saveSession);
+  if(sizeRange){
+    sizeRange.addEventListener('input', ()=>{ if(sizeVal) sizeVal.textContent = sizeRange.value; updatePreview(); });
+    sizeRange.addEventListener('change', saveSession);
+  }
 
-  // Note: preview and output are auto-scaled to 1280x960 (see updatePreview)
+  // Note: preview and output are now based on tiles of 320×240 (see updatePreview)
 
   function updatePreview(){
     if(!img.src) return;
-    // render a fixed-resolution preview for export (internal size), but scale it for display to fit container
-    const W = 1280, H = 960;
+    // render a preview for export (internal size) according to sizeRange (tiles of 320x240)
+    const mult = sizeRange ? Math.max(1, Math.min(12, parseInt(sizeRange.value,10)||4)) : 4;
+    const W = 320 * mult, H = 240 * mult;
     // set internal canvas resolution
     prev.width = W; prev.height = H;
     pctx.clearRect(0,0,prev.width,prev.height);
@@ -601,6 +665,40 @@ if (rotateConfirm) {
       const scale = Math.min(1, Math.min(maxW / W, maxH / H));
       prev.style.width = Math.round(W * scale) + 'px';
       prev.style.height = Math.round(H * scale) + 'px';
+      previewDisplayScale = scale;
+      // ensure preview size badge exists
+      if(!previewSizeEl){
+        previewSizeEl = document.getElementById('previewSize');
+        if(!previewSizeEl){
+          previewSizeEl = document.createElement('span');
+          previewSizeEl.id = 'previewSize';
+          // try to copy styling from origSize if present so it looks the same
+          const origSizeEl = document.getElementById('origSize');
+          if(origSizeEl) {
+            previewSizeEl.className = origSizeEl.className || '';
+          } else {
+            previewSizeEl.style.position = 'absolute';
+            previewSizeEl.style.top = '6px';
+            previewSizeEl.style.right = '6px';
+            previewSizeEl.style.background = 'rgba(255,255,255,0.9)';
+            previewSizeEl.style.border = '1px solid rgba(0,0,0,0.08)';
+            previewSizeEl.style.padding = '2px 6px';
+            previewSizeEl.style.borderRadius = '4px';
+            previewSizeEl.style.fontSize = '0.9em';
+            previewSizeEl.style.color = '#333';
+            previewSizeEl.style.zIndex = '50';
+          }
+          // ensure previewWrap can position absolutely-placed badge
+          if(previewWrap){
+            const cs = window.getComputedStyle(previewWrap);
+            if(cs.position === 'static') previewWrap.style.position = 'relative';
+            previewWrap.appendChild(previewSizeEl);
+          } else {
+            document.body.appendChild(previewSizeEl);
+          }
+        }
+      }
+      if(previewSizeEl) previewSizeEl.textContent = W + '×' + H;
       // ensure lens stays on top if visible
       if(lens) lens.style.display = '';
     }catch(e){
@@ -612,6 +710,8 @@ if (rotateConfirm) {
     // update binary size info
     const size = computeBinarySize();
     if(binSizeEl) binSizeEl.textContent = humanFileSize(size);
+    // update preview size badge (internal canvas size)
+    try { if(previewSizeEl) previewSizeEl.textContent = prev.width + '×' + prev.height; } catch(e) {}
   }
 
   // recalc preview display on window resize
@@ -717,7 +817,12 @@ if (rotateConfirm) {
     previewWrap.addEventListener('mousemove', e => {
       if(!img.src) return;
       const p = clientToCanvasPreview(e.clientX, e.clientY);
-      const srcW = LENS_SIZE / LENS_ZOOM;
+      // adapt effective zoom based on preview display scale so loupe is usable
+      // use a proportional (not inverse) scaling: when the preview is smaller
+      // the loupe zoom is reduced rather than amplified.
+      const displayScale = Math.max(0.1, (previewDisplayScale || 1));
+      const effectiveZoom = Math.max(1, Math.min(8, 1 + (LENS_ZOOM - 1) * displayScale));
+      const srcW = LENS_SIZE / effectiveZoom;
       const srcH = srcW;
       let sx = p.x - srcW/2;
       let sy = p.y - srcH/2;

@@ -32,6 +32,11 @@
           <input id="colors" type="range" min="2" max="16" value="16"><br>
           <label><input id="invert" type="checkbox"> Invert</label>
         </section>
+        <section>
+          <h4>Size</h4>
+          <label>Tiles: <span id="sizeVal">4</span> (320×240 each)</label>
+          <input id="sizeRange" type="range" min="1" max="12" value="4"><br>
+        </section>
       </aside>
 
       <section class="canvases">
@@ -41,7 +46,7 @@
           <!-- hint removed; crop now opens modal dialog -->
         </div>
         <div class="pane">
-          <h3>Preview (quantized) <span class="size-badge">1280×960</span></h3>
+          <h3>Preview (quantized) <span id="previewSize" class="size-badge">—</span></h3>
           <div class="preview-wrap">
             <canvas id="preview" width="1280" height="960"></canvas>
             <canvas id="lens" width="200" height="200" class="lens" aria-hidden="true"></canvas>
