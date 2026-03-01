@@ -1,4 +1,4 @@
-#Q ?= @
+Q ?= @
 CC = arm-none-eabi-gcc
 CXX = arm-none-eabi-g++
 BUILD_DIR = output

@@ -231,7 +231,7 @@ static void render_from_cache(int screen_y, int view_x, double scale) {
 }
 
 int main(void) {
-    //periodic();
+    periodic();
 
     eadk_display_push_rect_uniform(eadk_screen_rect, eadk_color_white);
     
