@@ -29,36 +29,34 @@ static int source_cache_used_width = 0;
 
 static int source_y_lookup[240];
 static int source_y_lookup_valid = 0;
-/* scan hint to allow incremental scanning across successive rows */
-static size_t scan_hint_idx = 0;
-static size_t scan_hint_off = 0;
+static uint32_t scan_hint_idx = 0;
+static uint32_t scan_hint_off = 0;
 static int scan_hint_valid = 0;
-/* small cache of recently computed row offsets */
 #define ROW_CACHE_SIZE 8
 #define MAX_COLS 12
-static size_t row_cache_keys[ROW_CACHE_SIZE];
-static size_t row_cache_offsets[ROW_CACHE_SIZE][MAX_COLS];
-static size_t row_cache_next = 0;
+static uint32_t row_cache_keys[ROW_CACHE_SIZE];
+static uint32_t row_cache_offsets[ROW_CACHE_SIZE][MAX_COLS];
+static uint32_t row_cache_next = 0;
 
 static void row_cache_init(void) {
-    for (size_t i = 0; i < ROW_CACHE_SIZE; ++i) row_cache_keys[i] = SIZE_MAX;
+    for (uint32_t i = 0; i < ROW_CACHE_SIZE; ++i) row_cache_keys[i] = UINT32_MAX;
     row_cache_next = 0;
 }
 
-static int row_cache_get(size_t source_y, size_t *out_offsets, size_t cols) {
-    for (size_t i = 0; i < ROW_CACHE_SIZE; ++i) {
+static int row_cache_get(uint32_t source_y, uint32_t *out_offsets, uint32_t cols) {
+    for (uint32_t i = 0; i < ROW_CACHE_SIZE; ++i) {
         if (row_cache_keys[i] == source_y) {
-            for (size_t c = 0; c < cols; ++c) out_offsets[c] = row_cache_offsets[i][c];
+            for (uint32_t c = 0; c < cols; ++c) out_offsets[c] = row_cache_offsets[i][c];
             return 1;
         }
     }
     return 0;
 }
 
-static void row_cache_put(size_t source_y, const size_t *offsets, size_t cols) {
-    size_t idx = row_cache_next % ROW_CACHE_SIZE;
+static void row_cache_put(uint32_t source_y, const uint32_t *offsets, uint32_t cols) {
+    uint32_t idx = row_cache_next % ROW_CACHE_SIZE;
     row_cache_keys[idx] = source_y;
-    for (size_t c = 0; c < cols; ++c) row_cache_offsets[idx][c] = offsets[c];
+    for (uint32_t c = 0; c < cols; ++c) row_cache_offsets[idx][c] = offsets[c];
     row_cache_next = (row_cache_next + 1) % ROW_CACHE_SIZE;
 }
 
@@ -79,9 +77,9 @@ static void build_source_y_lookup(int view_y, double scale, int rows) {
 }
 
 
-static size_t line_bytes(const char* d, size_t sz, size_t off) {
+static uint32_t line_bytes(const char* d, uint32_t sz, uint32_t off) {
     if (off >= sz) return 0;
-    size_t i = off;
+    uint32_t i = off;
     uint32_t pixels = 0;
     while (pixels < 320 && i < sz) {
         uint8_t b = (uint8_t)d[i++];
@@ -91,79 +89,75 @@ static size_t line_bytes(const char* d, size_t sz, size_t off) {
     return (pixels >= 320) ? (i - off) : 0;
 }
 
-static size_t get_offset_for_index(const char *data_local, size_t data_sz, size_t target_idx,
-                                   size_t line_cnt, size_t sample_interval,
-                                   const size_t *samples_local, size_t samples_cnt) {
-    if (target_idx >= line_cnt) return SIZE_MAX;
-    size_t sample_i = target_idx / sample_interval;
+static uint32_t get_offset_for_index(const char *data_local, uint32_t data_sz, uint32_t target_idx,
+                                   uint32_t line_cnt, uint32_t sample_interval,
+                                   const uint32_t *samples_local, uint32_t samples_cnt) {
+    if (target_idx >= line_cnt) return UINT32_MAX;
+    uint32_t sample_i = target_idx / sample_interval;
     if (sample_i >= samples_cnt) sample_i = samples_cnt ? samples_cnt - 1 : 0;
-    size_t offi = samples_local[sample_i];
-    size_t cur = sample_i * sample_interval;
+    uint32_t offi = samples_local[sample_i];
+    uint32_t cur = sample_i * sample_interval;
     while (cur < target_idx && offi < data_sz) {
-        size_t lb = line_bytes(data_local, data_sz, offi);
-        if (lb == 0) return SIZE_MAX;
+        uint32_t lb = line_bytes(data_local, data_sz, offi);
+        if (lb == 0) return UINT32_MAX;
         offi += lb;
         cur++;
     }
     return offi;
 }
 
-static int populate_col_offsets(const char *data_local, size_t data_sz,
-                                size_t *col_offsets, size_t cols, size_t source_y,
-                                size_t line_cnt, size_t sample_interval,
-                                const size_t *samples_local, size_t samples_cnt) {
-    size_t idx_start = (size_t)source_y * cols;
+static int populate_col_offsets(const char *data_local, uint32_t data_sz,
+                                uint32_t *col_offsets, uint32_t cols, uint32_t source_y,
+                                uint32_t line_cnt, uint32_t sample_interval,
+                                const uint32_t *samples_local, uint32_t samples_cnt) {
+    uint32_t idx_start = (uint32_t)source_y * cols;
     if (idx_start >= line_cnt) {
-        for (size_t c = 0; c < cols; ++c) col_offsets[c] = SIZE_MAX;
+        for (uint32_t c = 0; c < cols; ++c) col_offsets[c] = UINT32_MAX;
         return 0;
     }
 
-    size_t sample_i = idx_start / sample_interval;
+    uint32_t sample_i = idx_start / sample_interval;
     if (sample_i >= samples_cnt) sample_i = samples_cnt ? samples_cnt - 1 : 0;
-    size_t off = samples_local[sample_i];
-    size_t cur = sample_i * sample_interval;
+    uint32_t off = samples_local[sample_i];
+    uint32_t cur = sample_i * sample_interval;
 
-    /* If we have a recent scan hint and it's closer, start from it */
     if (scan_hint_valid && scan_hint_idx <= idx_start && scan_hint_idx >= sample_i * sample_interval) {
         off = scan_hint_off;
         cur = scan_hint_idx;
     }
 
-    /* advance to idx_start */
     while (cur < idx_start && off < data_sz) {
-        size_t lb = line_bytes(data_local, data_sz, off);
+        uint32_t lb = line_bytes(data_local, data_sz, off);
         if (lb == 0) return -1;
         off += lb;
         cur++;
     }
 
-    /* fill offsets for this row sequentially */
-    for (size_t c = 0; c < cols; ++c) {
-        size_t idx = idx_start + c;
-        if (idx >= line_cnt) { col_offsets[c] = SIZE_MAX; continue; }
-        if (off >= data_sz) { col_offsets[c] = SIZE_MAX; continue; }
+    for (uint32_t c = 0; c < cols; ++c) {
+        uint32_t idx = idx_start + c;
+        if (idx >= line_cnt) { col_offsets[c] = UINT32_MAX; continue; }
+        if (off >= data_sz) { col_offsets[c] = UINT32_MAX; continue; }
         col_offsets[c] = off;
-        size_t lb = line_bytes(data_local, data_sz, off);
-        if (lb == 0) { /* mark remaining as missing */
-            for (size_t cc = c + 1; cc < cols; ++cc) col_offsets[cc] = SIZE_MAX;
+        uint32_t lb = line_bytes(data_local, data_sz, off);
+        if (lb == 0) { 
+            for (uint32_t cc = c + 1; cc < cols; ++cc) col_offsets[cc] = UINT32_MAX;
             return -1;
         }
         off += lb;
     }
-    /* update scan hint to the position after the last filled line */
     scan_hint_idx = idx_start + cols;
     scan_hint_off = off;
     return 0;
 }
 
-static void decode_source_line(const char* data, size_t data_size,
-                               const size_t *offsets, int source_y, size_t cols) {
-    for (size_t c = 0; c < cols; ++c) {
+static void decode_source_line(const char* data, uint32_t data_size,
+                               const uint32_t *offsets, int source_y, uint32_t cols) {
+    for (uint32_t c = 0; c < cols; ++c) {
         int cache_x = (int)(c * 320);
         uint32_t pixels_drawn = 0;
-        size_t i = offsets[c];
+        uint32_t i = offsets[c];
 
-        if (i == SIZE_MAX) {
+        if (i == UINT32_MAX) {
             for (int x = 0; x < 320; ++x) {
                 int idx = cache_x + x;
                 if (idx >= 0 && idx < source_cache_used_width) source_cache[idx] = eadk_color_white;
@@ -185,7 +179,6 @@ static void decode_source_line(const char* data, size_t data_size,
                 pixels_drawn++;
             }
         }
-        /* If stream ended before filling 320 pixels, pad with white */
         while (pixels_drawn < 320) {
             int idx = cache_x + (int)pixels_drawn;
             if (idx >= 0 && idx < source_cache_used_width) source_cache[idx] = eadk_color_white;
@@ -236,10 +229,10 @@ int main(void) {
     eadk_display_push_rect_uniform(eadk_screen_rect, eadk_color_white);
     
     const char* data = eadk_external_data;
-    size_t data_size = eadk_external_data_size;
+    uint32_t data_size = (uint32_t)eadk_external_data_size;
 
-    size_t total_pixels = 0;
-    for (size_t i = 0; i < data_size; ++i) {
+    uint32_t total_pixels = 0;
+    for (uint32_t i = 0; i < data_size; ++i) {
         uint8_t b = (uint8_t)data[i];
         total_pixels += ((b >> 4) & 0x0F) + 1;
     }
@@ -251,26 +244,22 @@ int main(void) {
         return 0;
     }
 
-    size_t expected_line_count = total_pixels / 320ULL;
+    uint32_t expected_line_count = (uint32_t)(total_pixels / 320ULL);
 
-    /* To save RAM we don't store an offset per line. Instead store
-       sparse samples every SAMPLE_INTERVAL lines and scan on-demand. */
-    const size_t SAMPLE_INTERVAL = 64;
-    size_t sample_slots = (expected_line_count + SAMPLE_INTERVAL - 1) / SAMPLE_INTERVAL;
-    size_t *samples = (size_t*)malloc(sample_slots * sizeof(size_t));
+    const uint32_t SAMPLE_INTERVAL = 64;
+    uint32_t sample_slots = (expected_line_count + SAMPLE_INTERVAL - 1) / SAMPLE_INTERVAL;
+    uint32_t *samples = (uint32_t*)malloc(sample_slots * sizeof(uint32_t));
     if (!samples) return 0;
-    size_t off = 0;
-    size_t li = 0;
-    size_t sample_idx = 0;
+    uint32_t off = 0;
+    uint32_t li = 0;
+    uint32_t sample_idx = 0;
     while (off < data_size) {
-        size_t lb = line_bytes(data, data_size, off);
+        uint32_t lb = line_bytes(data, data_size, off);
         if (lb == 0) break;
         if ((li % SAMPLE_INTERVAL) == 0 && sample_idx < sample_slots) samples[sample_idx++] = off;
         li++;
         off += lb;
     }
-
-    /* scan hint will be initialized after samples_count is known */
 
     if (li == 0) {
         free(samples);
@@ -278,11 +267,10 @@ int main(void) {
         return 0;
     }
 
-    size_t line_count = (li < expected_line_count) ? li : expected_line_count;
+    uint32_t line_count = (li < expected_line_count) ? li : expected_line_count;
 
-    size_t samples_count = sample_idx;
+    uint32_t samples_count = sample_idx;
 
-    /* initialize scan hint and row cache now that samples_count is known */
     if (samples_count > 0) {
         scan_hint_idx = 0;
         scan_hint_off = samples[0];
@@ -294,21 +282,21 @@ int main(void) {
     }
     row_cache_init();
 
-    size_t cols = 0;
+    uint32_t cols = 0;
     double sqv = (double)line_count / 240.0;
     if (sqv > 0.0) {
-        size_t sc = (size_t)(sqrt(sqv) + 0.5);
-        if (sc >= 1 && sc <= 12 && (size_t)sc * (size_t)sc * 240ULL == line_count) {
+        uint32_t sc = (uint32_t)(sqrt(sqv) + 0.5);
+        if (sc >= 1 && sc <= 12 && (uint32_t)sc * (uint32_t)sc * 240U == line_count) {
             cols = sc;
         }
     }
 
     if (cols == 0) {
-        size_t best_cols2 = 0;
+        uint32_t best_cols2 = 0;
         double best_score = -1.0;
-        for (size_t c = 1; c <= 12; ++c) {
+        for (uint32_t c = 1; c <= 12; ++c) {
             if (line_count % c != 0) continue;
-            size_t r = line_count / c;
+            uint32_t r = line_count / c;
             if (r < 240) continue;
             if (r % 240 != 0) continue;
             int w = (int)(c * 320);
@@ -319,13 +307,13 @@ int main(void) {
             uint64_t sumsq = 0;
             int max_samples = (r > 8) ? 8 : (int)(r - 1);
             for (int k = 0; k < max_samples; ++k) {
-                size_t a = (size_t)k * c;
-                size_t b = (size_t)(k + 1) * c;
+                uint32_t a = (uint32_t)k * c;
+                uint32_t b = (uint32_t)(k + 1) * c;
                 if (b >= line_count || a >= line_count) break;
                 if (b >= li || a >= li) break; 
-                size_t off_a = get_offset_for_index(data, data_size, a, line_count, SAMPLE_INTERVAL, samples, samples_count);
-                size_t off_b = get_offset_for_index(data, data_size, b, line_count, SAMPLE_INTERVAL, samples, samples_count);
-                if (off_a == SIZE_MAX || off_b == SIZE_MAX) { nsamples = 0; break; }
+                uint32_t off_a = get_offset_for_index(data, data_size, a, line_count, SAMPLE_INTERVAL, samples, samples_count);
+                uint32_t off_b = get_offset_for_index(data, data_size, b, line_count, SAMPLE_INTERVAL, samples, samples_count);
+                if (off_a == UINT32_MAX || off_b == UINT32_MAX) { nsamples = 0; break; }
                 uint64_t bytes = (uint64_t)off_b - (uint64_t)off_a;
                 if (bytes == 0) { nsamples = 0; break; }
                 sum += bytes;
@@ -345,10 +333,21 @@ int main(void) {
         }
         cols = best_cols2 ? best_cols2 : 4;
     }
-    size_t rows = line_count / cols;
+    uint32_t rows = line_count / cols;
     int total_w = (int)cols * 320;
     int total_h = (int)rows;
     source_cache_used_width = total_w;    
+
+    uint32_t *col_offsets_heap_buf = NULL;
+    uint32_t col_offsets_heap_size = 0;
+    if (cols > MAX_COLS) {
+        col_offsets_heap_buf = (uint32_t*)malloc(cols * sizeof(uint32_t));
+        if (!col_offsets_heap_buf) {
+            free(samples);
+            return 0;
+        }
+        col_offsets_heap_size = cols;
+    }
 
     int view_x = 0, view_y = 0;
 
@@ -368,28 +367,19 @@ int main(void) {
         if (source_y < 0 || source_y >= (int)rows) continue;
         
         if (source_y != cached_source_y) {
-            size_t col_offsets_local[MAX_COLS];
-            size_t *col_offsets = NULL;
-            int col_offsets_heap = 0;
-            if (cols <= MAX_COLS) {
-                col_offsets = col_offsets_local;
-            } else {
-                col_offsets = (size_t*)malloc(cols * sizeof(size_t));
-                if (!col_offsets) break;
-                col_offsets_heap = 1;
-            }
-            if (!row_cache_get((size_t)source_y, col_offsets, cols)) {
-                if (populate_col_offsets(data, data_size, col_offsets, cols, (size_t)source_y, line_count, SAMPLE_INTERVAL, samples, samples_count) < 0) {
-                    /* fallback: fill with per-index lookups */
-                    for (size_t c = 0; c < cols; ++c) {
-                        size_t idx = (size_t)source_y * cols + c;
-                        col_offsets[c] = (idx < line_count) ? get_offset_for_index(data, data_size, idx, line_count, SAMPLE_INTERVAL, samples, samples_count) : SIZE_MAX;
+            uint32_t col_offsets_local[MAX_COLS];
+            uint32_t *col_offsets = (cols <= MAX_COLS) ? col_offsets_local : col_offsets_heap_buf;
+            if (!col_offsets) break;
+            if (!row_cache_get((uint32_t)source_y, col_offsets, cols)) {
+                if (populate_col_offsets(data, data_size, col_offsets, cols, (uint32_t)source_y, line_count, SAMPLE_INTERVAL, samples, samples_count) < 0) {
+                    for (uint32_t c = 0; c < cols; ++c) {
+                        uint32_t idx = (uint32_t)source_y * cols + c;
+                        col_offsets[c] = (idx < line_count) ? get_offset_for_index(data, data_size, idx, line_count, SAMPLE_INTERVAL, samples, samples_count) : UINT32_MAX;
                     }
                 }
-                row_cache_put((size_t)source_y, col_offsets, cols);
+                row_cache_put((uint32_t)source_y, col_offsets, cols);
             }
             decode_source_line(data, data_size, col_offsets, source_y, cols);
-            if (col_offsets_heap) free(col_offsets);
         }
         
         render_from_cache(screen_y, view_x, scale);
@@ -420,8 +410,6 @@ int main(void) {
             eadk_display_draw_string(buf, p, false, eadk_color_black, eadk_color_white);
         }
         */
-
-        uint64_t now = eadk_timing_millis();
 
         eadk_keyboard_state_t st = eadk_keyboard_scan();
         if (eadk_keyboard_key_down(st, eadk_key_home)) break;
@@ -478,27 +466,19 @@ int main(void) {
                 if (source_y < 0 || source_y >= (int)rows) continue;
                 
                 if (source_y != cached_source_y) {
-                                    size_t col_offsets_local[MAX_COLS];
-                                    size_t *col_offsets = NULL;
-                                    int col_offsets_heap = 0;
-                                    if (cols <= MAX_COLS) {
-                                        col_offsets = col_offsets_local;
-                                    } else {
-                                        col_offsets = (size_t*)malloc(cols * sizeof(size_t));
-                                        if (!col_offsets) break;
-                                        col_offsets_heap = 1;
-                                    }
-                                    if (!row_cache_get((size_t)source_y, col_offsets, cols)) {
-                                        if (populate_col_offsets(data, data_size, col_offsets, cols, (size_t)source_y, line_count, SAMPLE_INTERVAL, samples, samples_count) < 0) {
-                                            for (size_t c = 0; c < cols; ++c) {
-                                                size_t idx = (size_t)source_y * cols + c;
-                                                col_offsets[c] = (idx < line_count) ? get_offset_for_index(data, data_size, idx, line_count, SAMPLE_INTERVAL, samples, samples_count) : SIZE_MAX;
+                                    uint32_t col_offsets_local[MAX_COLS];
+                                    uint32_t *col_offsets = (cols <= MAX_COLS) ? col_offsets_local : col_offsets_heap_buf;
+                                    if (!col_offsets) break;
+                                    if (!row_cache_get((uint32_t)source_y, col_offsets, cols)) {
+                                        if (populate_col_offsets(data, data_size, col_offsets, cols, (uint32_t)source_y, line_count, SAMPLE_INTERVAL, samples, samples_count) < 0) {
+                                            for (uint32_t c = 0; c < cols; ++c) {
+                                                uint32_t idx = (uint32_t)source_y * cols + c;
+                                                col_offsets[c] = (idx < line_count) ? get_offset_for_index(data, data_size, idx, line_count, SAMPLE_INTERVAL, samples, samples_count) : UINT32_MAX;
                                             }
                                         }
-                                        row_cache_put((size_t)source_y, col_offsets, cols);
+                                        row_cache_put((uint32_t)source_y, col_offsets, cols);
                                     }
                                     decode_source_line(data, data_size, col_offsets, source_y, cols);
-                                    if (col_offsets_heap) free(col_offsets);
                 }
                 
                 render_from_cache(screen_y, view_x, scale);
@@ -508,6 +488,7 @@ int main(void) {
     }
 
     free(samples);
+    if (col_offsets_heap_buf) free(col_offsets_heap_buf);
 
     return 0;
 }
