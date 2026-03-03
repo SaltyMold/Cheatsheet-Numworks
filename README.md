@@ -10,7 +10,7 @@
     <img alt="Written In" src="https://img.shields.io/badge/Written%20In-C-yellow?style=flat-square">
 </p>
 
-<img src="assets/video.gif" width="250" alt="video">
+<!-- <img src="assets/video.gif" width="250" alt="video"> --> 
 
 ## 📕 Install the app
 
