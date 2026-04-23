@@ -23,6 +23,8 @@ $(addprefix $(BUILD_DIR)/,$(addsuffix .o,$(basename $(1))))
 endef
 
 src = $(addprefix src/,\
+  assets/calculator.c \
+  settings.c \
   libs/storage.c \
   periodic.c \
   main.c \

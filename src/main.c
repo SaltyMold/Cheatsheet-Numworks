@@ -1,13 +1,15 @@
 #include "libs/eadk.h"
 #include "libs/storage.h"
+#include "settings.h"
 #include "periodic.h"
 #include "shared.h"
 #include <string.h>
 
+
 const char eadk_app_name[] __attribute__((section(".rodata.eadk_app_name"))) = "Periodic";
 const uint32_t eadk_api_level  __attribute__((section(".rodata.eadk_api_level"))) = 0;
 
-#define SIMULATOR 0
+#define SIMULATOR 1
 
 #define SAVE_FILE "periodic.dat"
 
@@ -449,7 +451,14 @@ int main(void) {
         eadk_keyboard_state_t st = eadk_keyboard_scan();
         if (eadk_keyboard_key_down(st, eadk_key_home)) break;
 
-        if (eadk_keyboard_key_down(st, eadk_key_shift)) continue;
+        if (eadk_keyboard_key_down(st, eadk_key_shift)) {
+            for (int i = 0; i < 100; ++i) {
+                if (!eadk_keyboard_key_down(eadk_keyboard_scan(), eadk_key_shift)) break;
+                eadk_timing_msleep(5);
+            }
+
+            settings();
+        }
 
         int moved = 0;
         if (eadk_keyboard_key_down(st, eadk_key_right)) { view_x += pan_step * scale; moved = 1; }
