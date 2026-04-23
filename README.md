@@ -1,6 +1,6 @@
 <h1 align="center">Display cheatsheet or any high quality image on the Numworks calculator</h1>
 <p align="center">
-    <img alt="Version" src="https://img.shields.io/badge/Version-2.1.1-blue?style=for-the-badge&color=blue">
+    <img alt="Version" src="https://img.shields.io/badge/Version-2.2.1-blue?style=for-the-badge&color=blue">
     <img alt="Stars" src="https://img.shields.io/github/stars/SaltyMold/Cheatsheet-Numworks?style=for-the-badge&color=magenta">
     <img alt="Forks" src="https://img.shields.io/github/forks/SaltyMold/Cheatsheet-Numworks?color=cyan&style=for-the-badge&color=purple">
     <img alt="License" src="https://img.shields.io/github/license/SaltyMold/Cheatsheet-Numworks?style=for-the-badge&color=blue">
@@ -25,14 +25,13 @@ To install this app, you'll need to:
 | Key        | Action            |
 |------------|-------------------|
 | All arrows | Move in the image |
-| OK         | Zoom in           |
-| Back       | Zoom out          |
+| OK / Back  | Zoom +/-          |
+| Hold shift | Change binding    |
 
 > [!CAUTION]
-> The cheetsheet is hiden inside a periodic table. To access it, go to the Carbon element and press the key "9" five times.
+> The cheetsheet is hiden inside a periodic table. To access it, hold OK + Back + Zero. You can change this binding in the app by holding shift.
 
 ## 🛠️ Build the app
 
 I made tutorials here :
 - [C-App-Guide-for-Numworks](https://github.com/SaltyMold/C-App-Guide-for-Numworks)
-- [Numworks-App-Development-Template](https://github.com/SaltyMold/Numworks-App-Development-Template)
