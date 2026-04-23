@@ -1,97 +1,166 @@
 <!doctype html>
-<html lang="fr">
+<html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Image converter</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cheatsheet image converter</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div class="app-window">
-    <input id="file" type="file" accept="image/*" style="display:none">
+  <div class="app-container">
+    <input id="fileInput" type="file" accept="image/*" style="display:none">
 
-    <main class="workspace">
-      <aside class="sidebar left">
-        <section>
-          <h4>File</h4>
-          <button id="openBtn">Open</button>
-          <button id="undoBtn" title="Undo (Ctrl+Z)">Undo</button>
-          <button id="redoBtn" title="Redo">Redo</button>
+    <main class="app-main">
+      <!-- Left control panel -->
+      <aside class="control-panel left-panel">
+        <!-- File section -->
+        <section class="control-section">
+          <h3 class="section-title">📁 File</h3>
+          <button class="btn btn-primary" id="openBtn">
+            <span>Open image</span>
+          </button>
+          <div class="button-group">
+            <button class="btn btn-secondary" id="undoBtn" title="Undo (Ctrl+Z)">↶ Undo</button>
+            <button class="btn btn-secondary" id="redoBtn" title="Redo">↷ Redo</button>
+          </div>
         </section>
-        <section>
-          <h4>Tools</h4>
-          <button id="rotateBtn">Rotate 90°</button>
-          <button id="rotateCustomBtn">Rotate</button><br>
-          <button id="flipHBtn">Flip H</button>
-          <button id="flipVBtn">Flip V</button>
-          <button id="cropBtn">Crop</button>
+
+        <!-- Tools section -->
+        <section class="control-section">
+          <h3 class="section-title">✏️ Tools</h3>
+          <div class="button-group">
+            <button class="btn btn-small" id="rotateBtn">Rotate 90°</button>
+            <button class="btn btn-small" id="rotateCustomBtn">Free rotation</button>
+          </div>
+          <div class="button-group">
+            <button class="btn btn-small" id="flipHBtn">Flip H</button>
+            <button class="btn btn-small" id="flipVBtn">Flip V</button>
+          </div>
+          <button class="btn btn-small full-width" id="cropBtn">🔍 Crop</button>
         </section>
-        <section>
-          <h4>Colors</h4>
-          <label>Colors: <span id="colorsVal">16</span></label>
-          <input id="colors" type="range" min="2" max="16" value="16"><br>
-          <label><input id="invert" type="checkbox"> Invert</label>
+
+        <!-- Colors section -->
+        <section class="control-section">
+          <h3 class="section-title">🎨 Colors</h3>
+          <div class="control-group">
+            <label class="label-with-value">
+              Color count: <span id="colorsVal" class="value">16</span>
+            </label>
+            <input id="colors" type="range" min="2" max="16" value="16" class="slider">
+          </div>
+          <label class="checkbox-label">
+            <input id="invert" type="checkbox">
+            <span>Invert</span>
+          </label>
         </section>
-        <section>
-          <h4>Size</h4>
-          <label>Tiles: <span id="sizeVal">4</span> (320×240 each)</label>
-          <input id="sizeRange" type="range" min="1" max="12" value="4"><br>
+
+        <!-- Size section -->
+        <section class="control-section">
+          <h3 class="section-title">📐 Size</h3>
+          <div class="control-group">
+            <label class="label-with-value">
+              Tiles: <span id="sizeVal" class="value">4</span> <small>(320×240 each)</small>
+            </label>
+            <input id="sizeRange" type="range" min="1" max="12" value="4" class="slider">
+          </div>
+          <div class="info-box">
+            <strong id="outputSize" class="output-size">1280×960</strong>
+          </div>
         </section>
       </aside>
 
-      <section class="canvases">
-        <div class="pane">
-          <h3>Original / Edit <span id="origSize" class="size-badge">—</span></h3>
-          <div class="orig-wrap"><canvas id="orig" width="640" height="480"></canvas></div>
-          <!-- hint removed; crop now opens modal dialog -->
+      <!-- Central canvas area -->
+      <section class="canvas-area">
+        <!-- Original -->
+        <div class="canvas-pane">
+          <div class="pane-header">
+            <h2 class="pane-title">Original / Edit</h2>
+            <span class="size-badge" id="origSize">—</span>
+          </div>
+          <div class="canvas-wrapper">
+            <canvas id="orig" width="640" height="480"></canvas>
+          </div>
         </div>
-        <div class="pane">
-          <h3>Preview (quantized) <span id="previewSize" class="size-badge">—</span></h3>
-          <div class="preview-wrap">
+
+        <!-- Preview -->
+        <div class="canvas-pane">
+          <div class="pane-header">
+            <h2 class="pane-title">Preview (quantized)</h2>
+            <span class="size-badge" id="previewSize">—</span>
+          </div>
+          <div class="canvas-wrapper preview-wrapper">
             <canvas id="preview" width="1280" height="960"></canvas>
-            <canvas id="lens" width="200" height="200" class="lens" aria-hidden="true"></canvas>
+            <canvas id="lens" width="200" height="200" class="magnifier" aria-hidden="true"></canvas>
           </div>
         </div>
       </section>
-      <aside class="sidebar right">
-        <section>
-          <h4>Export</h4>
-          <button id="downloadBtn">Export .bin</button><br>
-          <button id="downloadPreviewBtn">Export PNG (preview)</button>
-          <div class="note">Binary size: <strong id="binSize">0</strong></div>
+
+      <!-- Right export panel -->
+      <aside class="control-panel right-panel">
+        <!-- Export section -->
+        <section class="control-section">
+          <h3 class="section-title">💾 Export</h3>
+          <button class="btn btn-primary full-width" id="downloadBtn">
+            Export .bin (RLE)
+          </button>
+          <button class="btn btn-secondary full-width" id="downloadPreviewBtn">
+            Export PNG
+          </button>
+          <div class="info-box">
+            <p class="info-label">Binary size:</p>
+            <p class="info-value"><strong id="binSize">0 B</strong></p>
+          </div>
+        </section>
+
+        <!-- Information -->
+        <section class="control-section">
+          <h3 class="section-title">ℹ️ Information</h3>
+          <div class="info-box">
+            <p id="statusText" class="status-text">Ready. Open an image to start.</p>
+          </div>
         </section>
       </aside>
     </main>
+
+    <!-- Modals -->
     <!-- Crop modal -->
     <div id="cropModal" class="modal" aria-hidden="true">
-      <div class="modal-backdrop"></div>
-      <div class="modal-panel">
-        <h3>Crop image</h3>
+      <div class="modal-overlay"></div>
+      <div class="modal-dialog">
+        <div class="modal-header">
+          <h2>Crop image</h2>
+          <button class="modal-close" id="cropCancel" aria-label="Close">&times;</button>
+        </div>
         <div class="modal-body">
           <canvas id="cropCanvas"></canvas>
         </div>
-        <div class="modal-actions">
-          <button id="cropConfirm">Apply Crop</button>
-          <button id="cropCancel">Cancel</button>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="cropCancel2">Cancel</button>
+          <button class="btn btn-primary" id="cropConfirm">Apply</button>
         </div>
       </div>
     </div>
 
-    <!-- Rotate modal -->
+    <!-- Rotation modal -->
     <div id="rotateModal" class="modal" aria-hidden="true">
-      <div class="modal-backdrop"></div>
-      <div class="modal-panel">
-        <h3>Rotate image</h3>
+      <div class="modal-overlay"></div>
+      <div class="modal-dialog">
+        <div class="modal-header">
+          <h2>Free rotation</h2>
+          <button class="modal-close" id="rotateCancel" aria-label="Close">&times;</button>
+        </div>
         <div class="modal-body">
           <canvas id="rotateCanvas"></canvas>
         </div>
         <div class="modal-controls">
-          <label>Angle: <span id="rotateAngleVal">0</span>°</label>
-          <input id="rotateAngle" type="range" min="-180" max="180" value="0" step="1" style="width:100%;">
+          <label class="label-with-value">
+            Angle: <span id="rotateAngleVal">0</span>°
+          </label>
+          <input id="rotateAngle" type="range" min="-180" max="180" value="0" step="1" class="slider full-width">
         </div>
-        <div class="modal-actions">
-          <button id="rotateConfirm">Apply Rotate</button>
-          <button id="rotateCancel">Cancel</button>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="rotateCancel2">Cancel</button>
+          <button class="btn btn-primary" id="rotateConfirm">Apply</button>
         </div>
       </div>
     </div>

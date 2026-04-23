@@ -1,3 +1,741 @@
+class ImageEditor {
+  constructor() {
+    this.image = new Image();
+    this.state = { w: 640, h: 480, angle: 0 };
+    this.history = [];
+    this.redoStack = [];
+    this.selection = null;
+    this.originalIntrinsic = null;
+    this.initialIntrinsic = null;
+    
+    this.initializeElements();
+    this.setupEventListeners();
+    this.loadSession();
+  }
+
+  initializeElements() {
+    this.fileInput = document.getElementById('fileInput');
+    this.origCanvas = document.getElementById('orig');
+    this.previewCanvas = document.getElementById('preview');
+    this.lensCanvas = document.getElementById('lens');
+    this.cropCanvas = document.getElementById('cropCanvas');
+    this.rotateCanvas = document.getElementById('rotateCanvas');
+    this.origCtx = this.origCanvas.getContext('2d');
+    this.previewCtx = this.previewCanvas.getContext('2d');
+    this.lensCtx = this.lensCanvas?.getContext('2d');
+    this.cropModal = document.getElementById('cropModal');
+    this.rotateModal = document.getElementById('rotateModal');
+    this.openBtn = document.getElementById('openBtn');
+    this.undoBtn = document.getElementById('undoBtn');
+    this.redoBtn = document.getElementById('redoBtn');
+    this.rotateBtn = document.getElementById('rotateBtn');
+    this.rotateCustomBtn = document.getElementById('rotateCustomBtn');
+    this.flipHBtn = document.getElementById('flipHBtn');
+    this.flipVBtn = document.getElementById('flipVBtn');
+    this.cropBtn = document.getElementById('cropBtn');
+    this.downloadBtn = document.getElementById('downloadBtn');
+    this.downloadPreviewBtn = document.getElementById('downloadPreviewBtn');
+    this.colorsRange = document.getElementById('colors');
+    this.colorsVal = document.getElementById('colorsVal');
+    this.invertChk = document.getElementById('invert');
+    this.sizeRange = document.getElementById('sizeRange');
+    this.sizeVal = document.getElementById('sizeVal');
+    this.binSizeEl = document.getElementById('binSize');
+    this.origSizeEl = document.getElementById('origSize');
+    this.previewSizeEl = document.getElementById('previewSize');
+    this.statusText = document.getElementById('statusText');
+    this.outputSize = document.getElementById('outputSize');
+    this.rotateAngleInput = document.getElementById('rotateAngle');
+    this.rotateAngleVal = document.getElementById('rotateAngleVal');
+    this.cropConfirm = document.getElementById('cropConfirm');
+    this.cropConfirm2 = document.getElementById('cropCancel2');
+    this.cropCancel = document.getElementById('cropCancel');
+    this.rotateConfirm = document.getElementById('rotateConfirm');
+    this.rotateCancel = document.getElementById('rotateCancel');
+    this.rotateCancel2 = document.getElementById('rotateCancel2');
+    this.previewWrap = document.querySelector('.preview-wrapper');
+    this.canvasWrap = document.querySelector('.canvas-wrapper');
+    this.modalSelection = null;
+    this.modalDragging = false;
+    this.modalScale = 1;
+  }
+
+  setupEventListeners() {
+    this.openBtn?.addEventListener('click', () => this.fileInput.click());
+    this.fileInput.addEventListener('change', (e) => this.handleFileSelect(e));
+    this.undoBtn?.addEventListener('click', () => this.undo());
+    this.redoBtn?.addEventListener('click', () => this.redo());
+    this.rotateBtn?.addEventListener('click', () => this.rotate90());
+    this.rotateCustomBtn?.addEventListener('click', () => this.openRotateModal());
+    this.flipHBtn?.addEventListener('click', () => this.flipHorizontal());
+    this.flipVBtn?.addEventListener('click', () => this.flipVertical());
+    this.cropBtn?.addEventListener('click', () => this.openCropModal());
+    this.downloadBtn?.addEventListener('click', () => this.exportBinary());
+    this.downloadPreviewBtn?.addEventListener('click', () => this.exportPreviewPng());
+    this.colorsRange?.addEventListener('input', () => this.updateColorValue());
+    this.colorsRange?.addEventListener('change', () => this.saveSession());
+    this.invertChk?.addEventListener('change', () => { this.updatePreview(); this.saveSession(); });
+    this.sizeRange?.addEventListener('input', () => this.updateSizeValue());
+    this.sizeRange?.addEventListener('change', () => this.saveSession());
+    this.cropCanvas?.addEventListener('mousedown', (e) => this.handleCropMouseDown(e));
+    this.cropCanvas?.addEventListener('touchstart', (e) => this.handleCropTouchStart(e));
+    this.cropConfirm?.addEventListener('click', () => this.applyCrop());
+    this.cropConfirm2?.addEventListener('click', () => this.applyCrop());
+    this.cropCancel?.addEventListener('click', () => this.closeModal(this.cropModal));
+    this.rotateAngleInput?.addEventListener('input', () => this.updateRotatePreview());
+    this.rotateConfirm?.addEventListener('click', () => this.applyRotate());
+    this.rotateCancel?.addEventListener('click', () => this.closeModal(this.rotateModal));
+    this.rotateCancel2?.addEventListener('click', () => this.closeModal(this.rotateModal));
+    window.addEventListener('keydown', (e) => this.handleKeyboard(e));
+    window.addEventListener('mousemove', (e) => this.handleModalMouseMove(e));
+    window.addEventListener('mouseup', () => this.handleModalMouseUp());
+    window.addEventListener('touchmove', (e) => this.handleModalTouchMove(e));
+    window.addEventListener('touchend', () => this.handleModalTouchEnd());
+    window.addEventListener('resize', () => this.handleResize());
+    window.addEventListener('beforeunload', () => this.saveSession());
+    this.previewWrap?.addEventListener('mousemove', (e) => this.updateMagnifier(e));
+    this.previewWrap?.addEventListener('mouseleave', () => this.hideMagnifier());
+    this.previewWrap?.addEventListener('mouseenter', () => this.showMagnifier());
+  }
+
+  handleFileSelect(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    this.image = new Image();
+    this.image.onload = () => {
+      this.originalIntrinsic = { w: this.image.naturalWidth || this.image.width, h: this.image.naturalHeight || this.image.height };
+      if (!this.initialIntrinsic) this.initialIntrinsic = { ...this.originalIntrinsic };
+      this.state.w = this.originalIntrinsic.w;
+      this.state.h = this.originalIntrinsic.h;
+      this.state.angle = 0;
+      this.selection = null;
+      this.history.length = 0;
+      this.pushHistory();
+      this.drawOriginal();
+      this.updatePreview();
+      this.previewCanvas.classList.remove('hidden');
+      this.redoStack.length = 0;
+      this.updateStatus(`Image loaded: ${this.state.w}×${this.state.h}`);
+      this.saveSession();
+    };
+    this.image.src = url;
+  }
+
+  pushHistory() {
+    try {
+      if (!this.image.src) return;
+      const src = this.origCanvas.toDataURL('image/jpeg', 0.8);
+      this.history.push({ src, w: this.state.w, h: this.state.h, originalIntrinsic: this.originalIntrinsic });
+      this.redoStack.length = 0;
+      if (this.history.length > 12) this.history.shift();
+    } catch (e) { /* ignore */ }
+  }
+
+  drawOriginal() {
+    this.origCanvas.width = this.state.w;
+    this.origCanvas.height = this.state.h;
+    this.origCtx.setTransform(1, 0, 0, 1, 0, 0);
+    this.origCtx.clearRect(0, 0, this.origCanvas.width, this.origCanvas.height);
+    this.origCtx.drawImage(this.image, 0, 0, this.state.w, this.state.h);
+    this.drawSelection();
+    this.updateOrigDisplay();
+    this.updateSizeDisplay();
+  }
+
+  drawSelection() {
+    if (!this.selection) return;
+    this.origCtx.save();
+    this.origCtx.beginPath();
+    this.origCtx.rect(0, 0, this.origCanvas.width, this.origCanvas.height);
+    this.origCtx.rect(this.selection.x, this.selection.y, this.selection.w, this.selection.h);
+    this.origCtx.fillStyle = 'rgba(0, 0, 0, 0.36)';
+    try { this.origCtx.fill('evenodd'); } catch (e) { this.origCtx.fill(); }
+    this.origCtx.strokeStyle = '#72f1ff';
+    this.origCtx.lineWidth = Math.max(1, Math.round(Math.min(this.origCanvas.width, this.origCanvas.height) / 300));
+    this.origCtx.strokeRect(this.selection.x + 0.5, this.selection.y + 0.5, this.selection.w - 1, this.selection.h - 1);
+    this.origCtx.restore();
+  }
+
+  updateOrigDisplay() {
+    try {
+      const rect = this.canvasWrap.getBoundingClientRect();
+      const maxW = Math.max(40, rect.width - 24);
+      const maxH = Math.max(40, rect.height - 24);
+      const scale = Math.min(1, Math.min(maxW / this.state.w, maxH / this.state.h));
+      this.origCanvas.style.width = Math.round(this.state.w * scale) + 'px';
+      this.origCanvas.style.height = Math.round(this.state.h * scale) + 'px';
+    } catch (e) { /* ignore */ }
+  }
+
+  updatePreview() {
+    if (!this.image.src) return;
+    const mult = Math.max(1, Math.min(12, parseInt(this.sizeRange?.value || 4, 10)));
+    const W = 320 * mult, H = 240 * mult;
+    this.previewCanvas.width = W;
+    this.previewCanvas.height = H;
+    this.previewCtx.clearRect(0, 0, W, H);
+    this.previewCtx.drawImage(this.origCanvas, 0, 0, this.state.w, this.state.h, 0, 0, W, H);
+    const data = this.previewCtx.getImageData(0, 0, W, H);
+    const ncolors = parseInt(this.colorsRange?.value || 16, 10);
+    const invert = this.invertChk?.checked || false;
+    for (let i = 0; i < data.data.length; i += 4) {
+      const intensity = Math.round((data.data[i] + data.data[i + 1] + data.data[i + 2]) / 3);
+      let idx = Math.round(intensity / 255 * (ncolors - 1));
+      if (invert) idx = (ncolors - 1) - idx;
+      const gray = Math.round(idx / (ncolors - 1) * 255);
+      data.data[i] = data.data[i + 1] = data.data[i + 2] = gray;
+    }
+    this.previewCtx.putImageData(data, 0, 0);
+    this.updatePreviewDisplay();
+    this.updateBinarySize();
+  }
+
+  updatePreviewDisplay() {
+    try {
+      const rect = this.previewWrap.getBoundingClientRect();
+      const maxW = Math.max(40, rect.width - 24);
+      const maxH = Math.max(40, rect.height - 24);
+      const scale = Math.min(1, Math.min(maxW / this.previewCanvas.width, maxH / this.previewCanvas.height));
+      this.previewCanvas.style.width = Math.round(this.previewCanvas.width * scale) + 'px';
+      this.previewCanvas.style.height = Math.round(this.previewCanvas.height * scale) + 'px';
+      if (this.previewSizeEl) this.previewSizeEl.textContent = `${this.previewCanvas.width}×${this.previewCanvas.height}`;
+    } catch (e) { /* ignore */ }
+  }
+
+  updateSizeDisplay() {
+    if (this.origSizeEl) this.origSizeEl.textContent = `${this.state.w}×${this.state.h}`;
+  }
+
+  updateColorValue() {
+    if (this.colorsVal) this.colorsVal.textContent = this.colorsRange?.value || 16;
+    this.updatePreview();
+  }
+
+  updateSizeValue() {
+    if (this.sizeVal) this.sizeVal.textContent = this.sizeRange?.value || 4;
+    const mult = parseInt(this.sizeRange?.value || 4, 10);
+    if (this.outputSize) this.outputSize.textContent = `${320 * mult}×${240 * mult}`;
+    this.updatePreview();
+  }
+
+  rotate90() {
+    if (!this.image.src) { alert('Load an image before rotating'); return; }
+    this.pushHistory();
+    const tmp = document.createElement('canvas');
+    tmp.width = this.state.h;
+    tmp.height = this.state.w;
+    const ctx = tmp.getContext('2d');
+    ctx.translate(tmp.width / 2, tmp.height / 2);
+    ctx.rotate(Math.PI / 2);
+    ctx.drawImage(this.origCanvas, -this.state.w / 2, -this.state.h / 2);
+    this.image = new Image();
+    this.image.onload = () => {
+      this.state.w = tmp.width;
+      this.state.h = tmp.height;
+      this.selection = null;
+      this.originalIntrinsic = { w: tmp.width, h: tmp.height };
+      this.drawOriginal();
+      this.updatePreview();
+      this.updateStatus('Image rotated 90°');
+      this.saveSession();
+    };
+    this.image.src = tmp.toDataURL();
+  }
+
+  flipHorizontal() {
+    if (!this.image.src) { alert('Load an image before flipping'); return; }
+    this.pushHistory();
+    const tmp = document.createElement('canvas');
+    tmp.width = this.state.w;
+    tmp.height = this.state.h;
+    const ctx = tmp.getContext('2d');
+    ctx.translate(tmp.width, 0);
+    ctx.scale(-1, 1);
+    ctx.drawImage(this.origCanvas, 0, 0);
+    this.image = new Image();
+    this.image.onload = () => {
+      this.selection = null;
+      this.originalIntrinsic = { w: tmp.width, h: tmp.height };
+      this.drawOriginal();
+      this.updatePreview();
+      this.updateStatus('Image flipped horizontally');
+      this.saveSession();
+    };
+    this.image.src = tmp.toDataURL();
+  }
+
+  flipVertical() {
+    if (!this.image.src) { alert('Load an image before flipping'); return; }
+    this.pushHistory();
+    const tmp = document.createElement('canvas');
+    tmp.width = this.state.w;
+    tmp.height = this.state.h;
+    const ctx = tmp.getContext('2d');
+    ctx.translate(0, tmp.height);
+    ctx.scale(1, -1);
+    ctx.drawImage(this.origCanvas, 0, 0);
+    this.image = new Image();
+    this.image.onload = () => {
+      this.selection = null;
+      this.originalIntrinsic = { w: tmp.width, h: tmp.height };
+      this.drawOriginal();
+      this.updatePreview();
+      this.updateStatus('Image flipped vertically');
+      this.saveSession();
+    };
+    this.image.src = tmp.toDataURL();
+  }
+
+  openCropModal() {
+    if (!this.image.src) { alert('Load an image before cropping'); return; }
+    const maxW = Math.round(window.innerWidth * 0.8);
+    const maxH = Math.round(window.innerHeight * 0.7);
+    this.modalScale = Math.min(1, Math.min(maxW / this.state.w, maxH / this.state.h));
+    const cw = Math.max(200, Math.round(this.state.w * this.modalScale));
+    const ch = Math.max(120, Math.round(this.state.h * this.modalScale));
+    this.cropCanvas.width = cw;
+    this.cropCanvas.height = ch;
+    const ctx = this.cropCanvas.getContext('2d');
+    ctx.clearRect(0, 0, cw, ch);
+    ctx.drawImage(this.origCanvas, 0, 0, this.state.w, this.state.h, 0, 0, cw, ch);
+    this.modalSelection = null;
+    this.modalDragging = false;
+    this.openModal(this.cropModal);
+  }
+
+  openRotateModal() {
+    if (!this.image.src) { alert('Load an image before rotating'); return; }
+    const maxW = Math.round(window.innerWidth * 0.8);
+    const maxH = Math.round(window.innerHeight * 0.7);
+    const scale = Math.min(1, Math.min(maxW / this.state.w, maxH / this.state.h));
+    const cw = Math.max(200, Math.round(this.state.w * scale));
+    const ch = Math.max(120, Math.round(this.state.h * scale));
+    this.rotateCanvas.width = cw;
+    this.rotateCanvas.height = ch;
+    this.rotateAngleInput.value = 0;
+    this.rotateAngleVal.textContent = '0';
+    this.updateRotatePreview();
+    this.openModal(this.rotateModal);
+  }
+
+  handleCropMouseDown(e) {
+    const rect = this.cropCanvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    this.modalSelection = { x, y, w: 0, h: 0 };
+    this.modalDragging = true;
+  }
+
+  handleCropTouchStart(e) {
+    if (!e.touches?.length) return;
+    const t = e.touches[0];
+    const rect = this.cropCanvas.getBoundingClientRect();
+    const x = t.clientX - rect.left;
+    const y = t.clientY - rect.top;
+    this.modalSelection = { x, y, w: 0, h: 0 };
+    this.modalDragging = true;
+    e.preventDefault();
+  }
+
+  handleModalMouseMove(e) {
+    if (!this.modalDragging || !this.modalSelection) return;
+    const rect = this.cropCanvas.getBoundingClientRect();
+    if (!rect.width) return;
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    this.modalSelection.w = x - this.modalSelection.x;
+    this.modalSelection.h = y - this.modalSelection.y;
+    this.redrawCropModal();
+  }
+
+  handleModalTouchMove(e) {
+    if (!this.modalDragging || !this.modalSelection) return;
+    if (!e.touches?.length) return;
+    const t = e.touches[0];
+    const rect = this.cropCanvas.getBoundingClientRect();
+    const x = t.clientX - rect.left;
+    const y = t.clientY - rect.top;
+    this.modalSelection.w = x - this.modalSelection.x;
+    this.modalSelection.h = y - this.modalSelection.y;
+    this.redrawCropModal();
+    e.preventDefault();
+  }
+
+  handleModalMouseUp() {
+    if (!this.modalDragging) return;
+    this.modalDragging = false;
+    this.normalizeCropSelection();
+    this.redrawCropModal();
+  }
+
+  handleModalTouchEnd(e) {
+    if (!this.modalDragging) return;
+    this.modalDragging = false;
+    this.normalizeCropSelection();
+    this.redrawCropModal();
+    e.preventDefault();
+  }
+
+  normalizeCropSelection() {
+    if (!this.modalSelection) return;
+    if (this.modalSelection.w < 0) {
+      this.modalSelection.x += this.modalSelection.w;
+      this.modalSelection.w = -this.modalSelection.w;
+    }
+    if (this.modalSelection.h < 0) {
+      this.modalSelection.y += this.modalSelection.h;
+      this.modalSelection.h = -this.modalSelection.h;
+    }
+    this.modalSelection.x = Math.max(0, Math.min(this.modalSelection.x, this.cropCanvas.width));
+    this.modalSelection.y = Math.max(0, Math.min(this.modalSelection.y, this.cropCanvas.height));
+    this.modalSelection.w = Math.max(0, Math.min(this.modalSelection.w, this.cropCanvas.width - this.modalSelection.x));
+    this.modalSelection.h = Math.max(0, Math.min(this.modalSelection.h, this.cropCanvas.height - this.modalSelection.y));
+    if (this.modalSelection.w < 4 || this.modalSelection.h < 4) this.modalSelection = null;
+  }
+
+  redrawCropModal() {
+    const ctx = this.cropCanvas.getContext('2d');
+    ctx.clearRect(0, 0, this.cropCanvas.width, this.cropCanvas.height);
+    ctx.drawImage(this.origCanvas, 0, 0, this.state.w, this.state.h, 0, 0, this.cropCanvas.width, this.cropCanvas.height);
+    if (this.modalSelection) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, 0, this.cropCanvas.width, this.cropCanvas.height);
+      ctx.rect(this.modalSelection.x, this.modalSelection.y, this.modalSelection.w, this.modalSelection.h);
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.36)';
+      try { ctx.fill('evenodd'); } catch (e) { ctx.fill(); }
+      ctx.strokeStyle = '#72f1ff';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(this.modalSelection.x + 0.5, this.modalSelection.y + 0.5, this.modalSelection.w - 1, this.modalSelection.h - 1);
+      ctx.restore();
+    }
+  }
+
+  applyCrop() {
+    if (!this.modalSelection) { alert('Select an area to crop'); return; }
+    const ox = Math.max(0, Math.floor(this.modalSelection.x / this.modalScale));
+    const oy = Math.max(0, Math.floor(this.modalSelection.y / this.modalScale));
+    const ow = Math.max(1, Math.floor(this.modalSelection.w / this.modalScale));
+    const oh = Math.max(1, Math.floor(this.modalSelection.h / this.modalScale));
+    this.pushHistory();
+    const tmp = document.createElement('canvas');
+    tmp.width = ow;
+    tmp.height = oh;
+    tmp.getContext('2d').drawImage(this.origCanvas, ox, oy, ow, oh, 0, 0, ow, oh);
+    this.image = new Image();
+    this.image.onload = () => {
+      this.state.w = tmp.width;
+      this.state.h = tmp.height;
+      this.selection = null;
+      this.originalIntrinsic = { w: tmp.width, h: tmp.height };
+      this.drawOriginal();
+      this.updatePreview();
+      this.closeModal(this.cropModal);
+      this.updateStatus(`Image cropped: ${this.state.w}×${this.state.h}`);
+      this.saveSession();
+    };
+    this.image.src = tmp.toDataURL();
+  }
+
+  largestRotatedRect(w, h, angleRad) {
+    let angle = Math.abs(angleRad);
+    if (angle > Math.PI / 2) angle = Math.PI - angle;
+    const sin = Math.abs(Math.sin(angle));
+    const cos = Math.abs(Math.cos(angle));
+    const widthIsLonger = w >= h;
+    const sideLong = widthIsLonger ? w : h;
+    const sideShort = widthIsLonger ? h : w;
+    let wr, hr;
+    if (sideShort <= 2 * sin * cos * sideLong) {
+      const x = 0.5 * sideShort;
+      if (widthIsLonger) { wr = x / sin; hr = x / cos; }
+      else { wr = x / cos; hr = x / sin; }
+    } else {
+      const cos2MinusSin2 = (cos * cos) - (sin * sin);
+      wr = (w * cos - h * sin) / cos2MinusSin2;
+      hr = (h * cos - w * sin) / cos2MinusSin2;
+    }
+    return { width: Math.floor(Math.abs(wr)), height: Math.floor(Math.abs(hr)) };
+  }
+
+  updateRotatePreview() {
+    const angle = parseInt(this.rotateAngleInput?.value || 0, 10);
+    this.rotateAngleVal.textContent = angle;
+    const ctx = this.rotateCanvas.getContext('2d');
+    ctx.clearRect(0, 0, this.rotateCanvas.width, this.rotateCanvas.height);
+    ctx.save();
+    ctx.translate(this.rotateCanvas.width / 2, this.rotateCanvas.height / 2);
+    ctx.rotate(angle * Math.PI / 180);
+    const scale = Math.min(1, Math.min((this.rotateCanvas.width * 0.8) / this.state.w, (this.rotateCanvas.height * 0.8) / this.state.h));
+    ctx.drawImage(this.origCanvas, -this.state.w * scale / 2, -this.state.h * scale / 2, this.state.w * scale, this.state.h * scale);
+    ctx.restore();
+    try {
+      const rad = angle * Math.PI / 180;
+      const rect = this.largestRotatedRect(this.state.w, this.state.h, rad);
+      const scale2 = Math.min(1, Math.min((this.rotateCanvas.width * 0.8) / this.state.w, (this.rotateCanvas.height * 0.8) / this.state.h));
+      const cropW = rect.width * scale2;
+      const cropH = rect.height * scale2;
+      const cx = this.rotateCanvas.width / 2;
+      const cy = this.rotateCanvas.height / 2;
+      ctx.beginPath();
+      ctx.rect(0, 0, this.rotateCanvas.width, this.rotateCanvas.height);
+      ctx.rect(cx - cropW / 2, cy - cropH / 2, cropW, cropH);
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.36)';
+      try { ctx.fill('evenodd'); } catch (e) { ctx.fill(); }
+      ctx.strokeStyle = '#72f1ff';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(Math.round(cx - cropW / 2 + 0.5), Math.round(cy - cropH / 2 + 0.5), Math.max(0, Math.round(cropW - 1)), Math.max(0, Math.round(cropH - 1)));
+    } catch (e) { /* ignore */ }
+  }
+
+  applyRotate() {
+    const angle = parseInt(this.rotateAngleInput?.value || 0, 10);
+    if (angle === 0) { this.closeModal(this.rotateModal); return; }
+    this.pushHistory();
+    const rad = angle * Math.PI / 180;
+    const w = this.state.w;
+    const h = this.state.h;
+    const tmp = document.createElement('canvas');
+    const absW = Math.abs(w * Math.cos(rad)) + Math.abs(h * Math.sin(rad));
+    const absH = Math.abs(w * Math.sin(rad)) + Math.abs(h * Math.cos(rad));
+    tmp.width = Math.ceil(absW);
+    tmp.height = Math.ceil(absH);
+    const ctx = tmp.getContext('2d');
+    ctx.translate(tmp.width / 2, tmp.height / 2);
+    ctx.rotate(rad);
+    ctx.drawImage(this.origCanvas, -w / 2, -h / 2);
+    const rect = this.largestRotatedRect(w, h, rad);
+    const cropW = rect.width;
+    const cropH = rect.height;
+    const offsetX = Math.floor((tmp.width - cropW) / 2);
+    const offsetY = Math.floor((tmp.height - cropH) / 2);
+    const cropped = document.createElement('canvas');
+    cropped.width = cropW;
+    cropped.height = cropH;
+    cropped.getContext('2d').drawImage(tmp, offsetX, offsetY, cropW, cropH, 0, 0, cropW, cropH);
+    this.image = new Image();
+    this.image.onload = () => {
+      this.state.w = cropped.width;
+      this.state.h = cropped.height;
+      this.selection = null;
+      this.originalIntrinsic = { w: cropped.width, h: cropped.height };
+      this.drawOriginal();
+      this.updatePreview();
+      this.closeModal(this.rotateModal);
+      this.updateStatus(`Image rotated: ${angle}°`);
+      this.saveSession();
+    };
+    this.image.src = cropped.toDataURL();
+  }
+
+  computeBinarySize() {
+    if (!this.image.src) return 0;
+    const ncolors = parseInt(this.colorsRange?.value || 16, 10);
+    const invert = this.invertChk?.checked || false;
+    const w = this.previewCanvas.width;
+    const h = this.previewCanvas.height;
+    const imgd = this.previewCtx.getImageData(0, 0, w, h).data;
+    let size = 0;
+    for (let y = 0; y < h; y++) {
+      for (let xChunk = 0; xChunk < w; xChunk += 320) {
+        const xEnd = Math.min(xChunk + 320, w);
+        let cur = Math.round(imgd[(y * w + xChunk) * 4] / 255 * (ncolors - 1));
+        if (invert) cur = (ncolors - 1) - cur;
+        let run = 1;
+        for (let x = xChunk + 1; x < xEnd; x++) {
+          let v = Math.round(imgd[(y * w + x) * 4] / 255 * (ncolors - 1));
+          if (invert) v = (ncolors - 1) - v;
+          if (v === cur && run < 16) run++; else { size++; cur = v; run = 1; }
+        }
+        if (run > 0) size++;
+      }
+    }
+    return size;
+  }
+
+  updateBinarySize() {
+    const size = this.computeBinarySize();
+    if (this.binSizeEl) this.binSizeEl.textContent = this.formatFileSize(size);
+  }
+
+  formatFileSize(bytes) {
+    if (!bytes) return '0 o';
+    const thresh = 1024;
+    if (Math.abs(bytes) < thresh) return bytes + ' o';
+    const units = ['ko', 'Mo', 'Go', 'To', 'Po', 'Eo', 'Zo', 'Yo'];
+    let u = -1;
+    do { bytes /= thresh; ++u; } while (Math.abs(bytes) >= thresh && u < units.length - 1);
+    return bytes.toFixed(1) + ' ' + units[u];
+  }
+
+  exportBinary() {
+    if (!this.image.src) { alert('Load an image'); return; }
+    this.updatePreview();
+    const ncolors = parseInt(this.colorsRange?.value || 16, 10);
+    const invert = this.invertChk?.checked || false;
+    const w = this.previewCanvas.width;
+    const h = this.previewCanvas.height;
+    const imgd = this.previewCtx.getImageData(0, 0, w, h).data;
+    const indices = [];
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4;
+        const intensity = imgd[i];
+        let idx = Math.round(intensity / 255 * (ncolors - 1));
+        if (invert) idx = (ncolors - 1) - idx;
+        const mapped = Math.round(idx / (ncolors - 1) * 15);
+        indices.push(mapped & 0x0F);
+      }
+    }
+    const out = [];
+    for (let y = 0; y < h; y++) {
+      for (let xChunk = 0; xChunk < w; xChunk += 320) {
+        const xEnd = Math.min(xChunk + 320, w);
+        let cur = indices[y * w + xChunk];
+        let run = 1;
+        for (let x = xChunk + 1; x < xEnd; x++) {
+          const v = indices[y * w + x];
+          if (v === cur && run < 16) run++; else { out.push(((run - 1) & 0x0F) << 4 | (cur & 0x0F)); cur = v; run = 1; }
+        }
+        if (run > 0) out.push(((run - 1) & 0x0F) << 4 | (cur & 0x0F));
+      }
+    }
+    const u8 = new Uint8Array(out);
+    const blob = new Blob([u8], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'input.bin';
+    a.click();
+    URL.revokeObjectURL(url);
+    this.updateStatus('Binary file exported');
+  }
+
+  exportPreviewPng() {
+    if (!this.image.src) { alert('Load an image'); return; }
+    this.previewCanvas.toBlob(blob => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'preview.png';
+      a.click();
+      URL.revokeObjectURL(url);
+      this.updateStatus('PNG preview exported');
+    });
+  }
+
+  undo() {
+    if (this.history.length <= 0) return;
+    try { if (this.image.src) this.redoStack.push({ src: this.origCanvas.toDataURL(), w: this.state.w, h: this.state.h, originalIntrinsic: this.originalIntrinsic }); } catch (e) { /* ignore */ }
+    const last = this.history.pop();
+    if (!last) return;
+    this.image = new Image();
+    this.image.onload = () => {
+      this.state.w = last.w;
+      this.state.h = last.h;
+      if (last.originalIntrinsic) this.originalIntrinsic = last.originalIntrinsic;
+      this.selection = null;
+      this.drawOriginal();
+      this.updatePreview();
+      this.updateStatus('Undo completed');
+      this.saveSession();
+    };
+    this.image.src = last.src;
+  }
+
+  redo() {
+    if (this.redoStack.length <= 0) return;
+    try { if (this.image.src) this.history.push({ src: this.origCanvas.toDataURL(), w: this.state.w, h: this.state.h, originalIntrinsic: this.originalIntrinsic }); } catch (e) { /* ignore */ }
+    const next = this.redoStack.pop();
+    if (!next) return;
+    this.image = new Image();
+    this.image.onload = () => {
+      this.state.w = next.w;
+      this.state.h = next.h;
+      if (next.originalIntrinsic) this.originalIntrinsic = next.originalIntrinsic;
+      this.selection = null;
+      this.drawOriginal();
+      this.updatePreview();
+      this.updateStatus('Redo completed');
+      this.saveSession();
+    };
+    this.image.src = next.src;
+  }
+
+  updateMagnifier(e) {
+    if (!this.image.src || !this.lensCtx) return;
+    const rect = this.previewWrap.getBoundingClientRect();
+    const x = (e.clientX - rect.left) * (this.previewCanvas.width / rect.width);
+    const y = (e.clientY - rect.top) * (this.previewCanvas.height / rect.height);
+    const LENS_SIZE = this.lensCanvas.width;
+    const LENS_ZOOM = 2.5;
+    const srcW = LENS_SIZE / LENS_ZOOM;
+    const srcH = srcW;
+    let sx = x - srcW / 2;
+    let sy = y - srcH / 2;
+    sx = Math.max(0, Math.min(sx, this.previewCanvas.width - srcW));
+    sy = Math.max(0, Math.min(sy, this.previewCanvas.height - srcH));
+    this.lensCtx.clearRect(0, 0, LENS_SIZE, LENS_SIZE);
+    this.lensCtx.drawImage(this.previewCanvas, sx, sy, srcW, srcH, 0, 0, LENS_SIZE, LENS_SIZE);
+    this.lensCanvas.style.left = (e.clientX - rect.left) + 'px';
+    this.lensCanvas.style.top = (e.clientY - rect.top) + 'px';
+    this.lensCanvas.classList.add('active');
+  }
+
+  showMagnifier() { if (this.lensCanvas) this.lensCanvas.classList.add('active'); }
+  hideMagnifier() { if (this.lensCanvas) this.lensCanvas.classList.remove('active'); }
+  handleKeyboard(e) {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); this.undo(); }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); this.exportBinary(); }
+  }
+  handleResize() { this.updateOrigDisplay(); this.updatePreviewDisplay(); }
+  openModal(modal) { modal.setAttribute('aria-hidden', 'false'); }
+  closeModal(modal) { modal.setAttribute('aria-hidden', 'true'); this.modalSelection = null; }
+  updateStatus(text) { if (this.statusText) this.statusText.textContent = text; }
+
+  saveSession() {
+    try {
+      if (!this.origCanvas) return;
+      const data = { image: this.origCanvas.toDataURL('image/jpeg', 0.8), state: { w: this.state.w, h: this.state.h }, originalIntrinsic: this.originalIntrinsic, colors: this.colorsRange?.value, size: this.sizeRange?.value, invert: this.invertChk?.checked, timestamp: Date.now() };
+      localStorage.setItem('Cheatsheet:session', JSON.stringify(data));
+    } catch (e) {
+      try {
+        const small = { image: data.image, state: data.state, originalIntrinsic: data.originalIntrinsic, timestamp: Date.now() };
+        localStorage.setItem('Cheatsheet:session', JSON.stringify(small));
+      } catch (e2) { /* give up */ }
+    }
+  }
+
+  loadSession() {
+    try {
+      const raw = localStorage.getItem('Cheatsheet:session');
+      if (!raw) { this.updateSizeValue(); return; }
+      const data = JSON.parse(raw);
+      if (!data?.image) { this.updateSizeValue(); return; }
+      this.image = new Image();
+      this.image.onload = () => {
+        this.state.w = data.state?.w || this.image.width;
+        this.state.h = data.state?.h || this.image.height;
+        this.originalIntrinsic = data.originalIntrinsic || { w: this.state.w, h: this.state.h };
+        this.selection = null;
+        this.history.length = 0;
+        this.drawOriginal();
+        if (this.colorsRange && data.colors) this.colorsRange.value = data.colors;
+        if (this.sizeRange && data.size) this.sizeRange.value = data.size;
+        if (this.invertChk) this.invertChk.checked = !!data.invert;
+        this.updateColorValue();
+        this.updateSizeValue();
+        this.updatePreview();
+        this.previewCanvas.classList.remove('hidden');
+        this.updateStatus('Session restored');
+      };
+      this.image.src = data.image;
+    } catch (e) { this.updateSizeValue(); }
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => { new ImageEditor(); });
 // Simple client-side image editor + RLE binary export
 (function(){
   const fileEl = document.getElementById('file');
@@ -69,7 +807,7 @@
   if(prev) prev.classList.add('hidden');
 
   // --- Session persistence (localStorage) ---
-  const SESSION_KEY = 'highImage:lastSession';
+  const SESSION_KEY = 'Cheatsheet:lastSession';
 
   function saveSession(){
     try{
