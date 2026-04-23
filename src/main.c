@@ -1,13 +1,26 @@
 #include "libs/eadk.h"
 #include "libs/storage.h"
 #include "periodic.h"
-#include <stdlib.h>
-#include <stdint.h>
-#include <limits.h>
-#include <math.h>
+#include "shared.h"
+#include <string.h>
 
 const char eadk_app_name[] __attribute__((section(".rodata.eadk_app_name"))) = "Periodic";
 const uint32_t eadk_api_level  __attribute__((section(".rodata.eadk_api_level"))) = 0;
+
+#define SIMULATOR 0
+
+#define SAVE_FILE "periodic.dat"
+
+const eadk_keyboard_state_t default_shortcut = (1ULL << eadk_key_ok) | (1ULL << eadk_key_back) | (1ULL << eadk_key_zero);
+
+eadk_keyboard_state_t saved_shortcut;
+
+/*
+contains the keyboard shorcut to open the app
+
+
+
+*/
 
 static const uint16_t grayscale_palette[16] = {
     0x0000, 0x1082, 0x2104, 0x3186,
@@ -224,6 +237,28 @@ static void render_from_cache(int screen_y, int view_x, double scale) {
 }
 
 int main(void) {
+    #if SIMULATOR == 0
+    if (!extapp_fileExists(SAVE_FILE)) { // first run
+        char data_buf[sizeof(eadk_keyboard_state_t)];
+        memcpy(data_buf, &default_shortcut, sizeof(default_shortcut));
+        extapp_fileWrite(SAVE_FILE, data_buf, sizeof(eadk_keyboard_state_t));
+        saved_shortcut = default_shortcut;
+    }
+    else {
+        size_t file_size = 0;
+        const char *data = extapp_fileRead(SAVE_FILE, &file_size);
+        if (data != NULL && file_size == sizeof(eadk_keyboard_state_t)) {
+            memcpy(&saved_shortcut, data, sizeof(saved_shortcut));
+        } else {
+            saved_shortcut = default_shortcut;
+            eadk_display_draw_string("Failed to read shortcut from file", (eadk_point_t){0, 0}, false, eadk_color_red, eadk_color_black);
+            eadk_timing_msleep(500);
+        }
+    }
+    #else
+    saved_shortcut = default_shortcut;
+    #endif
+
     periodic();
 
     eadk_display_push_rect_uniform(eadk_screen_rect, eadk_color_white);
@@ -413,6 +448,8 @@ int main(void) {
 
         eadk_keyboard_state_t st = eadk_keyboard_scan();
         if (eadk_keyboard_key_down(st, eadk_key_home)) break;
+
+        if (eadk_keyboard_key_down(st, eadk_key_shift)) continue;
 
         int moved = 0;
         if (eadk_keyboard_key_down(st, eadk_key_right)) { view_x += pan_step * scale; moved = 1; }
