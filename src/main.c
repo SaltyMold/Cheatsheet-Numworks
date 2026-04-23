@@ -9,9 +9,7 @@
 const char eadk_app_name[] __attribute__((section(".rodata.eadk_app_name"))) = "Periodic";
 const uint32_t eadk_api_level  __attribute__((section(".rodata.eadk_api_level"))) = 0;
 
-#define SIMULATOR 1
-
-#define SAVE_FILE "periodic.dat"
+#define SIMULATOR 0
 
 const eadk_keyboard_state_t default_shortcut = (1ULL << eadk_key_ok) | (1ULL << eadk_key_back) | (1ULL << eadk_key_zero);
 
@@ -238,9 +236,26 @@ static void render_from_cache(int screen_y, int view_x, double scale) {
     }
 }
 
+void first_launch() {
+    eadk_display_push_rect_uniform(eadk_screen_rect, eadk_color_black);
+
+    eadk_display_draw_string("This screen will no longer show up.", (eadk_point_t){0, 0}, false, eadk_color_red, eadk_color_black);
+    eadk_display_draw_string("The default binding is OK + Back + Zero", (eadk_point_t){0, 20}, false, eadk_color_green, eadk_color_black);
+	eadk_display_draw_string("Press Home to quit the app.", (eadk_point_t){0, 40}, false, eadk_color_white, eadk_color_black);
+	eadk_display_draw_string("Hold shift to change your binding to unlock", (eadk_point_t){0, 60}, false, eadk_color_white, eadk_color_black);
+	eadk_display_draw_string("Press OK/Back to zoom +/-", (eadk_point_t){0, 80}, false, eadk_color_white, eadk_color_black);
+	eadk_display_draw_string("Press arrow keys to move", (eadk_point_t){0, 100}, false, eadk_color_white, eadk_color_black);
+
+    eadk_display_draw_string("Press OK to continue", (eadk_point_t){0, 140}, true, eadk_color_white, eadk_color_black);
+	
+	eadk_timing_msleep(2000);
+	while (!eadk_keyboard_key_down(eadk_keyboard_scan(), eadk_key_ok));
+}
+
 int main(void) {
     #if SIMULATOR == 0
     if (!extapp_fileExists(SAVE_FILE)) { // first run
+        first_launch();
         char data_buf[sizeof(eadk_keyboard_state_t)];
         memcpy(data_buf, &default_shortcut, sizeof(default_shortcut));
         extapp_fileWrite(SAVE_FILE, data_buf, sizeof(eadk_keyboard_state_t));
@@ -454,10 +469,10 @@ int main(void) {
         if (eadk_keyboard_key_down(st, eadk_key_shift)) {
             for (int i = 0; i < 100; ++i) {
                 if (!eadk_keyboard_key_down(eadk_keyboard_scan(), eadk_key_shift)) break;
-                eadk_timing_msleep(5);
+                eadk_timing_msleep(10);
             }
 
-            settings();
+            if (settings()) return 0;
         }
 
         int moved = 0;

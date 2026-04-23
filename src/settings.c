@@ -1,5 +1,7 @@
 #include "settings.h"
 #include "libs/eadk.h"
+#include "shared.h"
+#include "libs/storage.h"
 
 #include "assets/calculator.h"
 
@@ -114,13 +116,36 @@ static const KeyCoordinate key_mappings[] = {
     
 };
 
-void settings() {
+int settings() {
     eadk_display_push_rect_uniform(eadk_screen_rect, eadk_color_white);
-    eadk_display_push_rect((eadk_rect_t){0, 0, calculator_width, calculator_height}, calculator_data);
-
-    for (size_t i = 0; i < sizeof(key_mappings) / sizeof(KeyCoordinate); ++i) {
-        eadk_display_push_rect_uniform((eadk_rect_t){key_mappings[i].x - 4, key_mappings[i].y - 4, 8, 8}, eadk_color_red);
-    }
-    eadk_timing_msleep(20000);
+    eadk_display_draw_string("Hold a key binding 5s", (eadk_point_t){130, 0}, false, eadk_color_black, eadk_color_white);
+    eadk_display_draw_string("to save it as the new", (eadk_point_t){130, 12}, false, eadk_color_black, eadk_color_white);
+    eadk_display_draw_string("unlock binding", (eadk_point_t){130, 24}, false, eadk_color_black, eadk_color_white);
     
+    eadk_keyboard_state_t state = 0;
+    int i = 0;
+    while (1) {
+        state = eadk_keyboard_scan();
+        
+        eadk_display_push_rect((eadk_rect_t){0, 0, calculator_width, calculator_height}, calculator_data);
+        for (size_t i = 0; i < sizeof(key_mappings) / sizeof(KeyCoordinate); ++i) {
+            if (state & ((uint64_t)1 << key_mappings[i].key)) {
+                eadk_display_push_rect_uniform((eadk_rect_t){key_mappings[i].x - 4, key_mappings[i].y - 4, 8, 8}, eadk_color_red);
+            }
+        }
+
+        eadk_timing_msleep(50);
+        if (state == eadk_keyboard_scan() && state != 0) ++i;
+        else i = 0;
+
+        if (i >= 100) {
+            saved_shortcut = state;
+            char data_buf[sizeof(eadk_keyboard_state_t)];
+            memcpy(data_buf, &saved_shortcut, sizeof(saved_shortcut));
+            extapp_fileErase(SAVE_FILE);
+            extapp_fileWrite(SAVE_FILE, data_buf, sizeof(eadk_keyboard_state_t));
+            eadk_display_push_rect_uniform(eadk_screen_rect, eadk_color_green);
+            return 1;
+        }
+    }
 }
