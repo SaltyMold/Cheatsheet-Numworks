@@ -391,14 +391,12 @@ int main(void) {
     source_cache_used_width = total_w;    
 
     uint32_t *col_offsets_heap_buf = NULL;
-    uint32_t col_offsets_heap_size = 0;
     if (cols > MAX_COLS) {
         col_offsets_heap_buf = (uint32_t*)malloc(cols * sizeof(uint32_t));
         if (!col_offsets_heap_buf) {
             free(samples);
             return 0;
         }
-        col_offsets_heap_size = cols;
     }
 
     int view_x = 0, view_y = 0;
@@ -467,12 +465,12 @@ int main(void) {
         if (eadk_keyboard_key_down(st, eadk_key_home)) break;
 
         if (eadk_keyboard_key_down(st, eadk_key_shift)) {
-            for (int i = 0; i < 100; ++i) {
-                if (!eadk_keyboard_key_down(eadk_keyboard_scan(), eadk_key_shift)) break;
+            for (int i = 0; i < 500 && eadk_keyboard_key_down(eadk_keyboard_scan(), eadk_key_shift); ++i) {
                 eadk_timing_msleep(10);
+                if (i == 100) {
+                    if (settings()) return 0;
+                }
             }
-
-            if (settings()) return 0;
         }
 
         int moved = 0;
