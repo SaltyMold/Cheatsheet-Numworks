@@ -1,6 +1,6 @@
 <h1 align="center">Display cheatsheet or any high quality image on the Numworks calculator</h1>
 <p align="center">
-    <img alt="Version" src="https://img.shields.io/badge/Version-2.2.1-blue?style=for-the-badge&color=blue">
+    <img alt="Version" src="https://img.shields.io/badge/Version-2.2.2-blue?style=for-the-badge&color=blue">
     <img alt="Stars" src="https://img.shields.io/github/stars/SaltyMold/Cheatsheet-Numworks?style=for-the-badge&color=magenta">
     <img alt="Forks" src="https://img.shields.io/github/forks/SaltyMold/Cheatsheet-Numworks?color=cyan&style=for-the-badge&color=purple">
     <img alt="License" src="https://img.shields.io/github/license/SaltyMold/Cheatsheet-Numworks?style=for-the-badge&color=blue">
