@@ -80,7 +80,7 @@ class ImageEditor {
     this.cropCanvas?.addEventListener('mousedown', (e) => this.handleCropMouseDown(e));
     this.cropCanvas?.addEventListener('touchstart', (e) => this.handleCropTouchStart(e));
     this.cropConfirm?.addEventListener('click', () => this.applyCrop());
-    this.cropConfirm2?.addEventListener('click', () => this.applyCrop());
+    this.cropConfirm2?.addEventListener('click', () => this.closeModal(this.cropModal));
     this.cropCancel?.addEventListener('click', () => this.closeModal(this.cropModal));
     this.rotateAngleInput?.addEventListener('input', () => this.updateRotatePreview());
     this.rotateConfirm?.addEventListener('click', () => this.applyRotate());

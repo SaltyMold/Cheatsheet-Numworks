@@ -7,136 +7,92 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div class="app-container">
-    <input id="fileInput" type="file" accept="image/*" style="display:none">
+  <div class="app">
+    <input id="fileInput" type="file" accept="image/*" hidden>
 
-    <main class="app-main">
-      <!-- Left control panel -->
-      <aside class="control-panel left-panel">
-        <!-- File section -->
-        <section class="control-section">
-          <h3 class="section-title">📁 File</h3>
-          <button class="btn btn-primary" id="openBtn">
-            <span>Open image</span>
-          </button>
-          <div class="button-group">
-            <button class="btn btn-secondary" id="undoBtn" title="Undo (Ctrl+Z)">↶ Undo</button>
-            <button class="btn btn-secondary" id="redoBtn" title="Redo">↷ Redo</button>
-          </div>
-        </section>
+    <!-- Toolbar -->
+    <header class="toolbar">
+      <div class="group">
+        <button class="btn primary" id="openBtn">Open image</button>
+      </div>
+      <div class="group">
+        <button class="btn" id="undoBtn" title="Undo (Ctrl+Z)">Undo</button>
+        <button class="btn" id="redoBtn" title="Redo">Redo</button>
+      </div>
+      <div class="group">
+        <button class="btn" id="cropBtn">Crop</button>
+        <button class="btn" id="rotateBtn">Rotate 90°</button>
+        <button class="btn" id="rotateCustomBtn">Rotate…</button>
+        <button class="btn" id="flipHBtn" title="Flip horizontally">Flip H</button>
+        <button class="btn" id="flipVBtn" title="Flip vertically">Flip V</button>
+      </div>
+      <div class="spacer"></div>
+      <div class="group">
+        <button class="btn" id="downloadPreviewBtn">Export PNG</button>
+        <button class="btn primary" id="downloadBtn" title="Export .bin (Ctrl+S)">Export .bin</button>
+      </div>
+    </header>
 
-        <!-- Tools section -->
-        <section class="control-section">
-          <h3 class="section-title">✏️ Tools</h3>
-          <div class="button-group">
-            <button class="btn btn-small" id="rotateBtn">Rotate 90°</button>
-            <button class="btn btn-small" id="rotateCustomBtn">Free rotation</button>
-          </div>
-          <div class="button-group">
-            <button class="btn btn-small" id="flipHBtn">Flip H</button>
-            <button class="btn btn-small" id="flipVBtn">Flip V</button>
-          </div>
-          <button class="btn btn-small full-width" id="cropBtn">🔍 Crop</button>
-        </section>
-
-        <!-- Colors section -->
-        <section class="control-section">
-          <h3 class="section-title">🎨 Colors</h3>
-          <div class="control-group">
-            <label class="label-with-value">
-              Color count: <span id="colorsVal" class="value">16</span>
-            </label>
-            <input id="colors" type="range" min="2" max="16" value="16" class="slider">
-          </div>
-          <label class="checkbox-label">
-            <input id="invert" type="checkbox">
-            <span>Invert</span>
-          </label>
-        </section>
-
-        <!-- Size section -->
-        <section class="control-section">
-          <h3 class="section-title">📐 Size</h3>
-          <div class="control-group">
-            <label class="label-with-value">
-              Tiles: <span id="sizeVal" class="value">4</span> <small>(320×240 each)</small>
-            </label>
-            <input id="sizeRange" type="range" min="1" max="12" value="4" class="slider">
-          </div>
-          <div class="info-box">
-            <strong id="outputSize" class="output-size">1280×960</strong>
-          </div>
-        </section>
-      </aside>
-
-      <!-- Central canvas area -->
-      <section class="canvas-area">
-        <!-- Original -->
-        <div class="canvas-pane">
-          <div class="pane-header">
-            <h2 class="pane-title">Original / Edit</h2>
-            <span class="size-badge" id="origSize">—</span>
-          </div>
-          <div class="canvas-wrapper">
-            <canvas id="orig" width="640" height="480"></canvas>
-          </div>
+    <!-- Canvases -->
+    <main class="panes">
+      <section class="pane">
+        <div class="pane-head">
+          <h2>Original</h2>
+          <span class="badge" id="origSize">—</span>
         </div>
-
-        <!-- Preview -->
-        <div class="canvas-pane">
-          <div class="pane-header">
-            <h2 class="pane-title">Preview (quantized)</h2>
-            <span class="size-badge" id="previewSize">—</span>
-          </div>
-          <div class="canvas-wrapper preview-wrapper">
-            <canvas id="preview" width="1280" height="960"></canvas>
-            <canvas id="lens" width="200" height="200" class="magnifier" aria-hidden="true"></canvas>
-          </div>
+        <div class="canvas-wrapper">
+          <canvas id="orig" width="640" height="480"></canvas>
         </div>
       </section>
 
-      <!-- Right export panel -->
-      <aside class="control-panel right-panel">
-        <!-- Export section -->
-        <section class="control-section">
-          <h3 class="section-title">💾 Export</h3>
-          <button class="btn btn-primary full-width" id="downloadBtn">
-            Export .bin (RLE)
-          </button>
-          <button class="btn btn-secondary full-width" id="downloadPreviewBtn">
-            Export PNG
-          </button>
-          <div class="info-box">
-            <p class="info-label">Binary size:</p>
-            <p class="info-value"><strong id="binSize">0 B</strong></p>
-          </div>
-        </section>
-
-        <!-- Information -->
-        <section class="control-section">
-          <h3 class="section-title">ℹ️ Information</h3>
-          <div class="info-box">
-            <p id="statusText" class="status-text">Ready. Open an image to start.</p>
-          </div>
-        </section>
-      </aside>
+      <section class="pane">
+        <div class="pane-head">
+          <h2>Preview</h2>
+          <span class="badge" id="previewSize">—</span>
+        </div>
+        <div class="canvas-wrapper preview-wrapper">
+          <canvas id="preview" width="1280" height="960"></canvas>
+          <canvas id="lens" width="200" height="200" class="magnifier" aria-hidden="true"></canvas>
+        </div>
+      </section>
     </main>
 
-    <!-- Modals -->
+    <!-- Settings + status -->
+    <footer class="settings">
+      <div class="field">
+        <label for="colors">Colors <output id="colorsVal">16</output></label>
+        <input id="colors" type="range" min="2" max="16" value="16">
+      </div>
+      <label class="check">
+        <input id="invert" type="checkbox">
+        <span>Invert</span>
+      </label>
+      <div class="field">
+        <label for="sizeRange">Tiles <output id="sizeVal">4</output> <small>320×240 each</small></label>
+        <input id="sizeRange" type="range" min="1" max="12" value="4">
+      </div>
+      <dl class="stats">
+        <div><dt>Output</dt><dd id="outputSize">1280×960</dd></div>
+        <div><dt>.bin size</dt><dd id="binSize">0 B</dd></div>
+      </dl>
+      <p class="status" id="statusText" role="status">Ready. Open an image to start.</p>
+    </footer>
+
     <!-- Crop modal -->
     <div id="cropModal" class="modal" aria-hidden="true">
       <div class="modal-overlay"></div>
-      <div class="modal-dialog">
-        <div class="modal-header">
+      <div class="modal-dialog" role="dialog" aria-label="Crop image">
+        <div class="modal-head">
           <h2>Crop image</h2>
-          <button class="modal-close" id="cropCancel" aria-label="Close">&times;</button>
+          <button class="icon-btn" id="cropCancel" aria-label="Close">&times;</button>
         </div>
         <div class="modal-body">
           <canvas id="cropCanvas"></canvas>
         </div>
-        <div class="modal-footer">
-          <button class="btn btn-secondary" id="cropCancel2">Cancel</button>
-          <button class="btn btn-primary" id="cropConfirm">Apply</button>
+        <div class="modal-foot">
+          <span class="hint">Drag on the image to select an area.</span>
+          <button class="btn" id="cropCancel2">Cancel</button>
+          <button class="btn primary" id="cropConfirm">Apply</button>
         </div>
       </div>
     </div>
@@ -144,23 +100,21 @@
     <!-- Rotation modal -->
     <div id="rotateModal" class="modal" aria-hidden="true">
       <div class="modal-overlay"></div>
-      <div class="modal-dialog">
-        <div class="modal-header">
-          <h2>Free rotation</h2>
-          <button class="modal-close" id="rotateCancel" aria-label="Close">&times;</button>
+      <div class="modal-dialog" role="dialog" aria-label="Rotate image">
+        <div class="modal-head">
+          <h2>Rotate image</h2>
+          <button class="icon-btn" id="rotateCancel" aria-label="Close">&times;</button>
         </div>
         <div class="modal-body">
           <canvas id="rotateCanvas"></canvas>
         </div>
         <div class="modal-controls">
-          <label class="label-with-value">
-            Angle: <span id="rotateAngleVal">0</span>°
-          </label>
-          <input id="rotateAngle" type="range" min="-180" max="180" value="0" step="1" class="slider full-width">
+          <label for="rotateAngle">Angle <output id="rotateAngleVal">0</output>°</label>
+          <input id="rotateAngle" type="range" min="-180" max="180" value="0" step="1">
         </div>
-        <div class="modal-footer">
-          <button class="btn btn-secondary" id="rotateCancel2">Cancel</button>
-          <button class="btn btn-primary" id="rotateConfirm">Apply</button>
+        <div class="modal-foot">
+          <button class="btn" id="rotateCancel2">Cancel</button>
+          <button class="btn primary" id="rotateConfirm">Apply</button>
         </div>
       </div>
     </div>
