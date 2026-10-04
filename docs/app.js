@@ -1,184 +1,369 @@
-class ImageEditor {
+(() => {
+const BW = 1280, BH = 960, MAXSRC = 2000, KEY = 'Cheatsheet:session:v2';
+const IDS = ['fileInput','orig','overlay','preview','lens','cropCanvas','rotateCanvas','cropModal','rotateModal','openBtn','undoBtn','redoBtn','rotateBtn','rotateCustomBtn','flipHBtn','flipVBtn','cropBtn','frontBtn','backBtn','deleteBtn','downloadBtn','downloadPreviewBtn','colors','colorsVal','invert','sizeRange','sizeVal','binSize','origSize','previewSize','statusText','outputSize','rotateAngle','rotateAngleVal','cropConfirm','cropCancel','cropCancel2','rotateConfirm','rotateCancel','rotateCancel2'];
+const rad = (d) => d * Math.PI / 180;
+const PAD = 32;       // free space around the board for handles of images that stick out
+const ROT_GAP = 28;   // distance of the rotate handle below the image (screen px)
+
+class Editor {
   constructor() {
-    this.image = new Image();
-    this.state = { w: 640, h: 480, angle: 0 };
-    this.history = [];
-    this.redoStack = [];
-    this.selection = null;
-    this.originalIntrinsic = null;
-    this.initialIntrinsic = null;
-    
-    this.initializeElements();
-    this.setupEventListeners();
-    this.loadSession();
+    IDS.forEach((id) => { this[id] = document.getElementById(id); });
+    this.octx = this.orig.getContext('2d');
+    this.pctx = this.preview.getContext('2d');
+    this.lctx = this.lens.getContext('2d');
+    this.origWrap = this.orig.parentElement;
+    this.prevWrap = this.preview.parentElement;
+    this.orig.width = BW; this.orig.height = BH;
+    this.board = this.orig; this.bctx = this.octx;          // the board is the original canvas itself
+    this.vctx = this.overlay.getContext('2d'); this.dpr = 1;  // overlay: dimmed overflow + selection handles
+    this.sources = new Map();   // id -> flattened source canvas
+    this.items = [];            // {id, src, x, y, w, h, angle, fx, fy, crop}
+    this.selId = null;
+    this.nextId = 1;
+    this.undoStack = []; this.redoStack = [];
+    this.drag = null; this.cropSel = null; this.dispScale = 1;
+    this.bind();
+    this.restore().then(() => {
+      this.updateLabels();
+      this.render(); this.updatePreview(); this.syncUi();
+      if (this.items.length) this.updateStatus('Session restored');
+    });
   }
 
-  initializeElements() {
-    this.fileInput = document.getElementById('fileInput');
-    this.origCanvas = document.getElementById('orig');
-    this.previewCanvas = document.getElementById('preview');
-    this.lensCanvas = document.getElementById('lens');
-    this.cropCanvas = document.getElementById('cropCanvas');
-    this.rotateCanvas = document.getElementById('rotateCanvas');
-    this.origCtx = this.origCanvas.getContext('2d');
-    this.previewCtx = this.previewCanvas.getContext('2d');
-    this.lensCtx = this.lensCanvas?.getContext('2d');
-    this.cropModal = document.getElementById('cropModal');
-    this.rotateModal = document.getElementById('rotateModal');
-    this.openBtn = document.getElementById('openBtn');
-    this.undoBtn = document.getElementById('undoBtn');
-    this.redoBtn = document.getElementById('redoBtn');
-    this.rotateBtn = document.getElementById('rotateBtn');
-    this.rotateCustomBtn = document.getElementById('rotateCustomBtn');
-    this.flipHBtn = document.getElementById('flipHBtn');
-    this.flipVBtn = document.getElementById('flipVBtn');
-    this.cropBtn = document.getElementById('cropBtn');
-    this.downloadBtn = document.getElementById('downloadBtn');
-    this.downloadPreviewBtn = document.getElementById('downloadPreviewBtn');
-    this.colorsRange = document.getElementById('colors');
-    this.colorsVal = document.getElementById('colorsVal');
-    this.invertChk = document.getElementById('invert');
-    this.sizeRange = document.getElementById('sizeRange');
-    this.sizeVal = document.getElementById('sizeVal');
-    this.binSizeEl = document.getElementById('binSize');
-    this.origSizeEl = document.getElementById('origSize');
-    this.previewSizeEl = document.getElementById('previewSize');
-    this.statusText = document.getElementById('statusText');
-    this.outputSize = document.getElementById('outputSize');
-    this.rotateAngleInput = document.getElementById('rotateAngle');
-    this.rotateAngleVal = document.getElementById('rotateAngleVal');
-    this.cropConfirm = document.getElementById('cropConfirm');
-    this.cropConfirm2 = document.getElementById('cropCancel2');
-    this.cropCancel = document.getElementById('cropCancel');
-    this.rotateConfirm = document.getElementById('rotateConfirm');
-    this.rotateCancel = document.getElementById('rotateCancel');
-    this.rotateCancel2 = document.getElementById('rotateCancel2');
-    this.previewWrap = document.querySelector('.preview-wrapper');
-    this.canvasWrap = document.querySelector('.canvas-wrapper');
-    this.modalSelection = null;
-    this.modalDragging = false;
-    this.modalScale = 1;
+  /* ---------- Events ---------- */
+  bind() {
+    const on = (el, ev, fn) => el.addEventListener(ev, fn);
+    on(this.openBtn, 'click', () => this.fileInput.click());
+    on(this.fileInput, 'change', async (e) => { await this.addFiles([...e.target.files]); e.target.value = ''; });
+    on(this.undoBtn, 'click', () => this.undo());
+    on(this.redoBtn, 'click', () => this.redo());
+    on(this.rotateBtn, 'click', () => this.rotate90());
+    on(this.rotateCustomBtn, 'click', () => this.openRotate());
+    on(this.flipHBtn, 'click', () => this.flip('fx'));
+    on(this.flipVBtn, 'click', () => this.flip('fy'));
+    on(this.cropBtn, 'click', () => this.openCrop());
+    on(this.frontBtn, 'click', () => this.reorder(1));
+    on(this.backBtn, 'click', () => this.reorder(-1));
+    on(this.deleteBtn, 'click', () => this.remove());
+    on(this.downloadBtn, 'click', () => this.exportBinary());
+    on(this.downloadPreviewBtn, 'click', () => this.exportPreviewPng());
+    on(this.colors, 'input', () => { this.updateLabels(); this.schedulePreview(); });
+    on(this.sizeRange, 'input', () => { this.updateLabels(); this.schedulePreview(); });
+    on(this.invert, 'change', () => this.schedulePreview());
+    ['change'].forEach((ev) => [this.colors, this.sizeRange, this.invert].forEach((el) => on(el, ev, () => this.scheduleSave())));
+
+    on(this.overlay, 'pointerdown', (e) => this.onDown(e));
+    on(this.overlay, 'pointermove', (e) => this.onMove(e));
+    on(this.overlay, 'pointerup', () => this.onUp());
+    on(this.overlay, 'pointercancel', () => this.onUp());
+    on(this.origWrap, 'dragover', (e) => e.preventDefault());
+    on(this.origWrap, 'drop', (e) => { e.preventDefault(); this.addFiles([...e.dataTransfer.files]); });
+
+    // modals
+    const close = (m) => () => this.closeModal(m);
+    [this.cropCancel, this.cropCancel2].forEach((b) => on(b, 'click', close(this.cropModal)));
+    [this.rotateCancel, this.rotateCancel2].forEach((b) => on(b, 'click', close(this.rotateModal)));
+    on(this.cropConfirm, 'click', () => this.applyCrop());
+    on(this.rotateConfirm, 'click', () => this.applyRotate());
+    on(this.rotateAngle, 'input', () => this.drawRotate());
+    on(this.cropCanvas, 'pointerdown', (e) => { this.cropStart = this.cropPt(e); this.cropSel = null; this.cropCanvas.setPointerCapture(e.pointerId); });
+    on(this.cropCanvas, 'pointermove', (e) => {
+      if (!this.cropStart) return;
+      const p = this.cropPt(e), s = this.cropStart;
+      this.cropSel = { x: Math.min(s.x, p.x), y: Math.min(s.y, p.y), w: Math.abs(p.x - s.x), h: Math.abs(p.y - s.y) };
+      this.drawCrop();
+    });
+    on(this.cropCanvas, 'pointerup', () => { this.cropStart = null; });
+
+    // keyboard, resize, saving
+    window.addEventListener('keydown', (e) => this.onKey(e));
+    window.addEventListener('resize', () => this.render());
+    window.addEventListener('beforeunload', () => this.save());
+
+    // magnifier on preview
+    on(this.prevWrap, 'mousemove', (e) => this.moveLens(e));
+    on(this.prevWrap, 'mouseleave', () => this.lens.classList.remove('active'));
   }
 
-  setupEventListeners() {
-    this.openBtn?.addEventListener('click', () => this.fileInput.click());
-    this.fileInput.addEventListener('change', (e) => this.handleFileSelect(e));
-    this.undoBtn?.addEventListener('click', () => this.undo());
-    this.redoBtn?.addEventListener('click', () => this.redo());
-    this.rotateBtn?.addEventListener('click', () => this.rotate90());
-    this.rotateCustomBtn?.addEventListener('click', () => this.openRotateModal());
-    this.flipHBtn?.addEventListener('click', () => this.flipHorizontal());
-    this.flipVBtn?.addEventListener('click', () => this.flipVertical());
-    this.cropBtn?.addEventListener('click', () => this.openCropModal());
-    this.downloadBtn?.addEventListener('click', () => this.exportBinary());
-    this.downloadPreviewBtn?.addEventListener('click', () => this.exportPreviewPng());
-    this.colorsRange?.addEventListener('input', () => this.updateColorValue());
-    this.colorsRange?.addEventListener('change', () => this.saveSession());
-    this.invertChk?.addEventListener('change', () => { this.updatePreview(); this.saveSession(); });
-    this.sizeRange?.addEventListener('input', () => this.updateSizeValue());
-    this.sizeRange?.addEventListener('change', () => this.saveSession());
-    this.cropCanvas?.addEventListener('mousedown', (e) => this.handleCropMouseDown(e));
-    this.cropCanvas?.addEventListener('touchstart', (e) => this.handleCropTouchStart(e));
-    this.cropConfirm?.addEventListener('click', () => this.applyCrop());
-    this.cropConfirm2?.addEventListener('click', () => this.closeModal(this.cropModal));
-    this.cropCancel?.addEventListener('click', () => this.closeModal(this.cropModal));
-    this.rotateAngleInput?.addEventListener('input', () => this.updateRotatePreview());
-    this.rotateConfirm?.addEventListener('click', () => this.applyRotate());
-    this.rotateCancel?.addEventListener('click', () => this.closeModal(this.rotateModal));
-    this.rotateCancel2?.addEventListener('click', () => this.closeModal(this.rotateModal));
-    window.addEventListener('keydown', (e) => this.handleKeyboard(e));
-    window.addEventListener('mousemove', (e) => this.handleModalMouseMove(e));
-    window.addEventListener('mouseup', () => this.handleModalMouseUp());
-    window.addEventListener('touchmove', (e) => this.handleModalTouchMove(e));
-    window.addEventListener('touchend', () => this.handleModalTouchEnd());
-    window.addEventListener('resize', () => this.handleResize());
-    window.addEventListener('beforeunload', () => this.saveSession());
-    this.previewWrap?.addEventListener('mousemove', (e) => this.updateMagnifier(e));
-    this.previewWrap?.addEventListener('mouseleave', () => this.hideMagnifier());
-    this.previewWrap?.addEventListener('mouseenter', () => this.showMagnifier());
+  onKey(e) {
+    if (document.querySelector('.modal[aria-hidden="false"]')) {
+      if (e.key === 'Escape') { this.closeModal(this.cropModal); this.closeModal(this.rotateModal); }
+      return;
+    }
+    const mod = e.ctrlKey || e.metaKey, k = e.key.toLowerCase();
+    if (mod && k === 'z') { e.preventDefault(); e.shiftKey ? this.redo() : this.undo(); }
+    else if (mod && k === 'y') { e.preventDefault(); this.redo(); }
+    else if (mod && k === 's') { e.preventDefault(); this.exportBinary(); }
+    else if ((e.key === 'Delete' || e.key === 'Backspace') && document.activeElement.tagName !== 'INPUT') this.remove();
   }
 
-  handleFileSelect(e) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const url = URL.createObjectURL(file);
-    this.image = new Image();
-    this.image.onload = () => {
-      this.originalIntrinsic = { w: this.image.naturalWidth || this.image.width, h: this.image.naturalHeight || this.image.height };
-      if (!this.initialIntrinsic) this.initialIntrinsic = { ...this.originalIntrinsic };
-      this.state.w = this.originalIntrinsic.w;
-      this.state.h = this.originalIntrinsic.h;
-      this.state.angle = 0;
-      this.selection = null;
-      this.history.length = 0;
-      this.pushHistory();
-      this.drawOriginal();
-      this.updatePreview();
-      this.previewCanvas.classList.remove('hidden');
-      this.redoStack.length = 0;
-      this.updateStatus(`Image loaded: ${this.state.w}×${this.state.h}`);
-      this.saveSession();
+  /* ---------- Model helpers ---------- */
+  sel() { return this.items.find((i) => i.id === this.selId) || null; }
+  need() { const it = this.sel(); if (!it) this.updateStatus('Select an image on the original first.'); return it; }
+  snap() { return JSON.stringify({ items: this.items, sel: this.selId }); }
+  load(s) { const o = JSON.parse(s); this.items = o.items; this.selId = o.sel; }
+  pushHistory() { this.undoStack.push(this.snap()); this.redoStack = []; if (this.undoStack.length > 60) this.undoStack.shift(); }
+  changed(msg) { const it = this.sel(); if (it) this.keepReachable(it); this.render(); this.syncUi(); this.updateStatus(msg); this.scheduleSave(); }
+
+  undo() {
+    if (!this.undoStack.length) return;
+    this.redoStack.push(this.snap()); this.load(this.undoStack.pop());
+    this.changed('Undone');
+  }
+  redo() {
+    if (!this.redoStack.length) return;
+    this.undoStack.push(this.snap()); this.load(this.redoStack.pop());
+    this.changed('Redone');
+  }
+
+  loadImage(url) {
+    return new Promise((res, rej) => {
+      const img = new Image();
+      img.onload = () => { if (url.startsWith('blob:')) URL.revokeObjectURL(url); res(img); };
+      img.onerror = rej;
+      img.src = url;
+    });
+  }
+
+  async addFiles(files) {
+    files = files.filter((f) => f.type.startsWith('image/'));
+    if (!files.length) return;
+    this.pushHistory();
+    let added = 0;
+    for (const f of files) {
+      try {
+        const img = await this.loadImage(URL.createObjectURL(f));
+        const k = Math.min(1, MAXSRC / Math.max(img.naturalWidth, img.naturalHeight));
+        const c = document.createElement('canvas');
+        c.width = Math.max(1, Math.round(img.naturalWidth * k));
+        c.height = Math.max(1, Math.round(img.naturalHeight * k));
+        const x = c.getContext('2d');
+        x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height);
+        x.drawImage(img, 0, 0, c.width, c.height);
+        const id = 'i' + this.nextId++;
+        this.sources.set(id, c);
+        const s = Math.min(1, BW * 0.8 / c.width, BH * 0.8 / c.height), off = (this.items.length % 8) * 30;
+        this.items.push({ id, src: id, x: BW / 2 + off, y: BH / 2 + off, w: c.width * s, h: c.height * s, angle: 0, fx: 1, fy: 1, crop: { x: 0, y: 0, w: c.width, h: c.height } });
+        this.selId = id; added++;
+      } catch (e) { this.updateStatus(`Could not read ${f.name}.`); }
+    }
+    if (!added) { this.undoStack.pop(); return; }
+    this.changed(`${added} image${added > 1 ? 's' : ''} added`);
+  }
+
+  /* ---------- Selected image actions ---------- */
+  rotate90() {
+    const it = this.need(); if (!it) return;
+    this.pushHistory(); it.angle = (it.angle + 90) % 360;
+    this.changed('Rotated 90°');
+  }
+  flip(axis) {
+    const it = this.need(); if (!it) return;
+    this.pushHistory(); it[axis] *= -1; it.angle = -it.angle;   // mirror in screen space
+    this.changed(axis === 'fx' ? 'Flipped horizontally' : 'Flipped vertically');
+  }
+  reorder(dir) {
+    const it = this.need(); if (!it) return;
+    const i = this.items.indexOf(it), j = Math.max(0, Math.min(this.items.length - 1, i + dir));
+    if (i === j) return;
+    this.pushHistory(); this.items.splice(i, 1); this.items.splice(j, 0, it);
+    this.changed(dir > 0 ? 'Brought forward' : 'Sent backward');
+  }
+  remove() {
+    const it = this.sel(); if (!it) return;
+    this.pushHistory(); this.items = this.items.filter((i) => i !== it); this.selId = null;
+    this.changed('Image removed');
+  }
+
+  /* ---------- Board pointer interaction ---------- */
+  toBoard(e) {
+    const r = this.orig.getBoundingClientRect();
+    return { x: (e.clientX - r.left) * BW / r.width, y: (e.clientY - r.top) * BH / r.height, k: BW / r.width };
+  }
+  local(it, p) {
+    const a = rad(-it.angle), dx = p.x - it.x, dy = p.y - it.y;
+    return { x: dx * Math.cos(a) - dy * Math.sin(a), y: dx * Math.sin(a) + dy * Math.cos(a) };
+  }
+  // Resize handles: corners first, then edge midpoints (edges skipped when too short)
+  handleList(it, r) {
+    const c = [], e = [];
+    for (const hy of [-1, 0, 1]) for (const hx of [-1, 0, 1]) {
+      if (!hx && !hy) continue;
+      if (!(hx && hy) && (hx ? it.h : it.w) <= 4 * r) continue;
+      (hx && hy ? c : e).push({ hx, hy, x: hx * it.w / 2, y: hy * it.h / 2 });
+    }
+    return c.concat(e);
+  }
+  hit(p) {
+    const s = this.sel(), r = 9 * p.k;
+    if (s) {
+      const l = this.local(s, p);
+      if (Math.hypot(l.x, l.y - (s.h / 2 + ROT_GAP * p.k)) <= r) return { it: s, handle: { rot: true } };
+      const h = this.handleList(s, r).find((q) => Math.hypot(l.x - q.x, l.y - q.y) <= r);
+      if (h) return { it: s, handle: h };
+    }
+    for (let i = this.items.length - 1; i >= 0; i--) {
+      const it = this.items[i], l = this.local(it, p);
+      if (Math.abs(l.x) <= it.w / 2 && Math.abs(l.y) <= it.h / 2) return { it, handle: null };
+    }
+    return null;
+  }
+  cursorFor(h, it) {
+    if (h.rot) return 'grab';
+    let a = Math.atan2(h.hy, h.hx) * 180 / Math.PI + it.angle;
+    a = ((a % 180) + 180) % 180;
+    return a < 22.5 || a >= 157.5 ? 'ew-resize' : a < 67.5 ? 'nwse-resize' : a < 112.5 ? 'ns-resize' : 'nesw-resize';
+  }
+  onDown(e) {
+    if (e.button !== 0) return;
+    const p = this.toBoard(e), h = this.hit(p);
+    this.selId = h ? h.it.id : null;
+    if (h) {
+      this.drag = { mode: !h.handle ? 'move' : h.handle.rot ? 'rot' : 'size', hd: h.handle, id: h.it.id, p0: p, it0: { ...h.it }, pending: this.snap() };
+      this.overlay.setPointerCapture(e.pointerId);
+    }
+    this.draw(); this.syncUi();
+  }
+  onMove(e) {
+    const p = this.toBoard(e), d = this.drag;
+    if (!d) {
+      const h = this.hit(p);
+      this.overlay.style.cursor = !h ? 'default' : h.handle ? this.cursorFor(h.handle, h.it) : 'move';
+      return;
+    }
+    if (d.pending) {
+      if (Math.hypot(p.x - d.p0.x, p.y - d.p0.y) < 3 * p.k) return;
+      this.undoStack.push(d.pending); this.redoStack = []; d.pending = null;
+    }
+    const it = this.sel(); if (!it) return;
+    const o = d.it0;
+    if (d.mode === 'move') {
+      it.x = o.x + p.x - d.p0.x; it.y = o.y + p.y - d.p0.y;
+      this.keepReachable(it);
+    } else if (d.mode === 'rot') {
+      let a = Math.atan2(p.y - o.y, p.x - o.x) * 180 / Math.PI - 90;
+      a = ((a + 540) % 360) - 180;
+      const s90 = Math.round(a / 90) * 90;
+      if (e.shiftKey) a = Math.round(a / 15) * 15; else if (Math.abs(a - s90) < 3) a = s90;
+      it.angle = a;
+      this.keepReachable(it);
+    } else {
+      // opposite edge/corner stays fixed; corners keep the ratio unless Shift is held
+      const vis = this.visible(), g = ROT_GAP * p.k;
+      const q = { x: Math.min(Math.max(p.x, vis.minX + g), vis.maxX - g), y: Math.min(Math.max(p.y, vis.minY + g), vis.maxY - g) };
+      const { hx, hy } = d.hd, l = this.local(o, q), MIN = 8;
+      const ax = -hx * o.w / 2, ay = -hy * o.h / 2;
+      let w = o.w, h = o.h, cx = 0, cy = 0;
+      if (hx) w = Math.max(MIN, hx * (l.x - ax));
+      if (hy) h = Math.max(MIN, hy * (l.y - ay));
+      if (hx && hy && !e.shiftKey) { const k = Math.max(w / o.w, h / o.h); w = o.w * k; h = o.h * k; }
+      if (hx) cx = ax + hx * w / 2;
+      if (hy) cy = ay + hy * h / 2;
+      const r = rad(o.angle);
+      it.w = w; it.h = h;
+      it.x = o.x + cx * Math.cos(r) - cy * Math.sin(r);
+      it.y = o.y + cx * Math.sin(r) + cy * Math.cos(r);
+    }
+    this.render(); this.syncUi();
+  }
+  onUp() {
+    const d = this.drag; this.drag = null;
+    if (!d) return;
+    if (d.pending) { if (d.mode === 'rot') this.rotate90(); return; }   // click on the rotate handle = 90°
+    this.scheduleSave();
+  }
+
+  /* ---------- Rendering ---------- */
+  drawItem(x, it) {
+    x.save();
+    x.translate(it.x, it.y); x.rotate(rad(it.angle)); x.scale(it.fx, it.fy);
+    x.drawImage(this.sources.get(it.src), it.crop.x, it.crop.y, it.crop.w, it.crop.h, -it.w / 2, -it.h / 2, it.w, it.h);
+    x.restore();
+  }
+  fit() {
+    const place = (cv, wrap, w, h, pad) => {
+      const k = Math.max(0.05, Math.min(8, (wrap.clientWidth - 2 * pad) / w, (wrap.clientHeight - 2 * pad) / h));
+      cv.style.width = Math.round(w * k) + 'px'; cv.style.height = Math.round(h * k) + 'px';
+      return k;
     };
-    this.image.src = url;
+    this.dispScale = place(this.orig, this.origWrap, BW, BH, PAD);
+    place(this.preview, this.prevWrap, this.preview.width, this.preview.height, 12);   // also scales up small previews
+    const dpr = window.devicePixelRatio || 1, cw = Math.round(this.origWrap.clientWidth * dpr), ch = Math.round(this.origWrap.clientHeight * dpr);
+    this.dpr = dpr;
+    if (this.overlay.width !== cw || this.overlay.height !== ch) { this.overlay.width = cw; this.overlay.height = ch; }
+  }
+  // board <-> overlay geometry
+  view() {
+    const o = this.orig.getBoundingClientRect(), v = this.overlay.getBoundingClientRect();
+    return { ox: o.left - v.left, oy: o.top - v.top, ds: o.width / BW || 1 };
+  }
+  visible() {   // visible area of the overlay, in board coordinates
+    const v = this.view(), k = 1 / v.ds, m = 8 * k, cw = this.overlay.width / this.dpr, ch = this.overlay.height / this.dpr;
+    return { minX: -v.ox * k + m, maxX: (cw - v.ox) * k - m, minY: -v.oy * k + m, maxY: (ch - v.oy) * k - m };
+  }
+  // shift the image so that all its handles stay inside the visible area
+  keepReachable(it) {
+    if (this.overlay.width < 10) return;
+    const vis = this.visible(), k = 1 / this.view().ds, a = rad(it.angle), c = Math.cos(a), s = Math.sin(a);
+    const pts = [];
+    const add = (lx, ly) => pts.push([it.x + lx * c - ly * s, it.y + lx * s + ly * c]);
+    for (const sx of [-1, 1]) for (const sy of [-1, 1]) add(sx * it.w / 2, sy * it.h / 2);
+    add(0, it.h / 2 + (ROT_GAP + 8) * k);
+    const xs = pts.map((q) => q[0]), ys = pts.map((q) => q[1]);
+    const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+    const fix = (lo, hi, vmin, vmax) => (hi - lo > vmax - vmin) ? (vmin + vmax) / 2 - (lo + hi) / 2 : lo < vmin ? vmin - lo : hi > vmax ? vmax - hi : 0;
+    it.x += fix(x0, x1, vis.minX, vis.maxX);
+    it.y += fix(y0, y1, vis.minY, vis.maxY);
+  }
+  render() {
+    const x = this.bctx;
+    x.fillStyle = '#fff'; x.fillRect(0, 0, BW, BH);
+    this.items.forEach((it) => this.drawItem(x, it));
+    this.fit(); this.draw(); this.schedulePreview();
+  }
+  draw() {
+    const x = this.vctx, v = this.view(), k = 1 / v.ds, it = this.sel();
+    const cw = this.overlay.width / this.dpr, ch = this.overlay.height / this.dpr;
+    x.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    x.clearRect(0, 0, cw, ch);
+    // parts of images that stick out of the board, dimmed
+    x.save();
+    x.beginPath(); x.rect(0, 0, cw, ch); x.rect(v.ox, v.oy, BW * v.ds, BH * v.ds); x.clip('evenodd');
+    x.translate(v.ox, v.oy); x.scale(v.ds, v.ds); x.globalAlpha = 0.4;
+    this.items.forEach((i) => this.drawItem(x, i));
+    x.restore();
+    if (!it) return;
+    x.save();
+    x.translate(v.ox, v.oy); x.scale(v.ds, v.ds);
+    x.translate(it.x, it.y); x.rotate(rad(it.angle));
+    x.strokeStyle = '#2f6df6'; x.fillStyle = '#fff'; x.lineWidth = 1.5 * k;
+    x.setLineDash([6 * k, 4 * k]); x.strokeRect(-it.w / 2, -it.h / 2, it.w, it.h); x.setLineDash([]);
+    const h = 9 * k;
+    for (const q of this.handleList(it, h)) {
+      x.fillRect(q.x - h / 2, q.y - h / 2, h, h);
+      x.strokeRect(q.x - h / 2, q.y - h / 2, h, h);
+    }
+    // rotate handle below the image
+    const ry = it.h / 2 + ROT_GAP * k;
+    x.beginPath(); x.moveTo(0, it.h / 2); x.lineTo(0, ry - 6 * k); x.stroke();
+    x.beginPath(); x.arc(0, ry, 7 * k, 0, Math.PI * 2); x.fill(); x.stroke();
+    x.beginPath(); x.arc(0, ry, 3.2 * k, 0.4 * Math.PI, 1.8 * Math.PI); x.stroke();
+    x.restore();
   }
 
-  pushHistory() {
-    try {
-      if (!this.image.src) return;
-      const src = this.origCanvas.toDataURL('image/jpeg', 0.8);
-      this.history.push({ src, w: this.state.w, h: this.state.h, originalIntrinsic: this.originalIntrinsic });
-      this.redoStack.length = 0;
-      if (this.history.length > 12) this.history.shift();
-    } catch (e) { /* ignore */ }
-  }
+  schedulePreview() { clearTimeout(this.pt); this.pt = setTimeout(() => this.updatePreview(), 60); }
 
-  drawOriginal() {
-    this.origCanvas.width = this.state.w;
-    this.origCanvas.height = this.state.h;
-    this.origCtx.setTransform(1, 0, 0, 1, 0, 0);
-    this.origCtx.clearRect(0, 0, this.origCanvas.width, this.origCanvas.height);
-    this.origCtx.drawImage(this.image, 0, 0, this.state.w, this.state.h);
-    this.drawSelection();
-    this.updateOrigDisplay();
-    this.updateSizeDisplay();
-  }
-
-  drawSelection() {
-    if (!this.selection) return;
-    this.origCtx.save();
-    this.origCtx.beginPath();
-    this.origCtx.rect(0, 0, this.origCanvas.width, this.origCanvas.height);
-    this.origCtx.rect(this.selection.x, this.selection.y, this.selection.w, this.selection.h);
-    this.origCtx.fillStyle = 'rgba(0, 0, 0, 0.36)';
-    try { this.origCtx.fill('evenodd'); } catch (e) { this.origCtx.fill(); }
-    this.origCtx.strokeStyle = '#72f1ff';
-    this.origCtx.lineWidth = Math.max(1, Math.round(Math.min(this.origCanvas.width, this.origCanvas.height) / 300));
-    this.origCtx.strokeRect(this.selection.x + 0.5, this.selection.y + 0.5, this.selection.w - 1, this.selection.h - 1);
-    this.origCtx.restore();
-  }
-
-  updateOrigDisplay() {
-    try {
-      const rect = this.canvasWrap.getBoundingClientRect();
-      const maxW = Math.max(40, rect.width - 24);
-      const maxH = Math.max(40, rect.height - 24);
-      const scale = Math.min(1, Math.min(maxW / this.state.w, maxH / this.state.h));
-      this.origCanvas.style.width = Math.round(this.state.w * scale) + 'px';
-      this.origCanvas.style.height = Math.round(this.state.h * scale) + 'px';
-    } catch (e) { /* ignore */ }
-  }
-
+  // Same quantization as before: board -> W×H, mean of RGB -> N gray levels
   updatePreview() {
-    if (!this.image.src) return;
-    const mult = Math.max(1, Math.min(12, parseInt(this.sizeRange?.value || 4, 10)));
+    clearTimeout(this.pt);
+    const mult = Math.max(1, Math.min(12, parseInt(this.sizeRange.value || 4, 10)));
     const W = 320 * mult, H = 240 * mult;
-    this.previewCanvas.width = W;
-    this.previewCanvas.height = H;
-    this.previewCtx.clearRect(0, 0, W, H);
-    this.previewCtx.drawImage(this.origCanvas, 0, 0, this.state.w, this.state.h, 0, 0, W, H);
-    const data = this.previewCtx.getImageData(0, 0, W, H);
-    const ncolors = parseInt(this.colorsRange?.value || 16, 10);
-    const invert = this.invertChk?.checked || false;
+    this.preview.width = W; this.preview.height = H;
+    this.pctx.clearRect(0, 0, W, H);
+    this.pctx.drawImage(this.board, 0, 0, BW, BH, 0, 0, W, H);
+    const data = this.pctx.getImageData(0, 0, W, H);
+    const ncolors = parseInt(this.colors.value || 16, 10);
+    const invert = this.invert.checked;
     for (let i = 0; i < data.data.length; i += 4) {
       const intensity = Math.round((data.data[i] + data.data[i + 1] + data.data[i + 2]) / 3);
       let idx = Math.round(intensity / 255 * (ncolors - 1));
@@ -186,356 +371,116 @@ class ImageEditor {
       const gray = Math.round(idx / (ncolors - 1) * 255);
       data.data[i] = data.data[i + 1] = data.data[i + 2] = gray;
     }
-    this.previewCtx.putImageData(data, 0, 0);
-    this.updatePreviewDisplay();
-    this.updateBinarySize();
+    this.pctx.putImageData(data, 0, 0);
+    this.fit();
+    this.previewSize.textContent = `${W}×${H}`;
+    this.binSize.textContent = this.formatFileSize(this.computeBinarySize());
   }
 
-  updatePreviewDisplay() {
-    try {
-      const rect = this.previewWrap.getBoundingClientRect();
-      const maxW = Math.max(40, rect.width - 24);
-      const maxH = Math.max(40, rect.height - 24);
-      const scale = Math.min(1, Math.min(maxW / this.previewCanvas.width, maxH / this.previewCanvas.height));
-      this.previewCanvas.style.width = Math.round(this.previewCanvas.width * scale) + 'px';
-      this.previewCanvas.style.height = Math.round(this.previewCanvas.height * scale) + 'px';
-      if (this.previewSizeEl) this.previewSizeEl.textContent = `${this.previewCanvas.width}×${this.previewCanvas.height}`;
-    } catch (e) { /* ignore */ }
+  updateLabels() {
+    this.colorsVal.textContent = this.colors.value;
+    this.sizeVal.textContent = this.sizeRange.value;
+    const m = parseInt(this.sizeRange.value, 10);
+    this.outputSize.textContent = `${320 * m}×${240 * m}`;
+  }
+  updateStatus(t) { this.statusText.textContent = t; }
+  syncUi() {
+    const has = !!this.sel();
+    [this.rotateBtn, this.rotateCustomBtn, this.flipHBtn, this.flipVBtn, this.cropBtn, this.frontBtn, this.backBtn, this.deleteBtn].forEach((b) => { b.disabled = !has; });
+    this.undoBtn.disabled = !this.undoStack.length;
+    this.redoBtn.disabled = !this.redoStack.length;
+    const n = this.items.length;
+    this.origSize.textContent = !n ? '—' : `${n} image${n > 1 ? 's' : ''}${has ? ', 1 selected' : ''}`;
   }
 
-  updateSizeDisplay() {
-    if (this.origSizeEl) this.origSizeEl.textContent = `${this.state.w}×${this.state.h}`;
+  moveLens(e) {
+    const r = this.preview.getBoundingClientRect(), w = this.prevWrap.getBoundingClientRect();
+    if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) { this.lens.classList.remove('active'); return; }
+    const ds = r.width / this.preview.width, sw = 50 / ds;
+    const px = (e.clientX - r.left) / ds, py = (e.clientY - r.top) / ds;
+    this.lctx.imageSmoothingEnabled = false;
+    this.lctx.clearRect(0, 0, 200, 200);
+    this.lctx.drawImage(this.preview, px - sw / 2, py - sw / 2, sw, sw, 0, 0, 200, 200);
+    this.lens.style.left = (e.clientX - w.left) + 'px';
+    this.lens.style.top = (e.clientY - w.top) + 'px';
+    this.lens.classList.add('active');
   }
 
-  updateColorValue() {
-    if (this.colorsVal) this.colorsVal.textContent = this.colorsRange?.value || 16;
-    this.updatePreview();
+  /* ---------- Crop modal (selected image only) ---------- */
+  openModal(m) { m.setAttribute('aria-hidden', 'false'); }
+  closeModal(m) { m.setAttribute('aria-hidden', 'true'); this.cropStart = null; }
+  cropPt(e) {
+    const r = this.cropCanvas.getBoundingClientRect(), c = this.cropCanvas;
+    return { x: Math.max(0, Math.min(c.width, (e.clientX - r.left) * c.width / r.width)), y: Math.max(0, Math.min(c.height, (e.clientY - r.top) * c.height / r.height)) };
   }
-
-  updateSizeValue() {
-    if (this.sizeVal) this.sizeVal.textContent = this.sizeRange?.value || 4;
-    const mult = parseInt(this.sizeRange?.value || 4, 10);
-    if (this.outputSize) this.outputSize.textContent = `${320 * mult}×${240 * mult}`;
-    this.updatePreview();
+  openCrop() {
+    const it = this.need(); if (!it) return;
+    const c = it.crop, s = Math.min(1, innerWidth * 0.8 / c.w, innerHeight * 0.6 / c.h);
+    this.cropCanvas.width = Math.max(40, Math.round(c.w * s));
+    this.cropCanvas.height = Math.max(40, Math.round(c.h * s));
+    this.cropSel = null; this.drawCrop(); this.openModal(this.cropModal);
   }
-
-  rotate90() {
-    if (!this.image.src) { alert('Load an image before rotating'); return; }
-    this.pushHistory();
-    const tmp = document.createElement('canvas');
-    tmp.width = this.state.h;
-    tmp.height = this.state.w;
-    const ctx = tmp.getContext('2d');
-    ctx.translate(tmp.width / 2, tmp.height / 2);
-    ctx.rotate(Math.PI / 2);
-    ctx.drawImage(this.origCanvas, -this.state.w / 2, -this.state.h / 2);
-    this.image = new Image();
-    this.image.onload = () => {
-      this.state.w = tmp.width;
-      this.state.h = tmp.height;
-      this.selection = null;
-      this.originalIntrinsic = { w: tmp.width, h: tmp.height };
-      this.drawOriginal();
-      this.updatePreview();
-      this.updateStatus('Image rotated 90°');
-      this.saveSession();
-    };
-    this.image.src = tmp.toDataURL();
+  drawCrop() {
+    const it = this.sel(), c = it.crop, cv = this.cropCanvas, x = cv.getContext('2d'), W = cv.width, H = cv.height;
+    x.clearRect(0, 0, W, H);
+    x.save(); x.translate(it.fx < 0 ? W : 0, it.fy < 0 ? H : 0); x.scale(it.fx, it.fy);
+    x.drawImage(this.sources.get(it.src), c.x, c.y, c.w, c.h, 0, 0, W, H);
+    x.restore();
+    const s = this.cropSel; if (!s) return;
+    x.save();
+    x.fillStyle = 'rgba(0,0,0,.55)'; x.beginPath(); x.rect(0, 0, W, H); x.rect(s.x, s.y, s.w, s.h); x.fill('evenodd');
+    x.strokeStyle = '#7aa7ff'; x.lineWidth = 2; x.strokeRect(s.x, s.y, s.w, s.h);
+    x.restore();
   }
-
-  flipHorizontal() {
-    if (!this.image.src) { alert('Load an image before flipping'); return; }
-    this.pushHistory();
-    const tmp = document.createElement('canvas');
-    tmp.width = this.state.w;
-    tmp.height = this.state.h;
-    const ctx = tmp.getContext('2d');
-    ctx.translate(tmp.width, 0);
-    ctx.scale(-1, 1);
-    ctx.drawImage(this.origCanvas, 0, 0);
-    this.image = new Image();
-    this.image.onload = () => {
-      this.selection = null;
-      this.originalIntrinsic = { w: tmp.width, h: tmp.height };
-      this.drawOriginal();
-      this.updatePreview();
-      this.updateStatus('Image flipped horizontally');
-      this.saveSession();
-    };
-    this.image.src = tmp.toDataURL();
-  }
-
-  flipVertical() {
-    if (!this.image.src) { alert('Load an image before flipping'); return; }
-    this.pushHistory();
-    const tmp = document.createElement('canvas');
-    tmp.width = this.state.w;
-    tmp.height = this.state.h;
-    const ctx = tmp.getContext('2d');
-    ctx.translate(0, tmp.height);
-    ctx.scale(1, -1);
-    ctx.drawImage(this.origCanvas, 0, 0);
-    this.image = new Image();
-    this.image.onload = () => {
-      this.selection = null;
-      this.originalIntrinsic = { w: tmp.width, h: tmp.height };
-      this.drawOriginal();
-      this.updatePreview();
-      this.updateStatus('Image flipped vertically');
-      this.saveSession();
-    };
-    this.image.src = tmp.toDataURL();
-  }
-
-  openCropModal() {
-    if (!this.image.src) { alert('Load an image before cropping'); return; }
-    const maxW = Math.round(window.innerWidth * 0.8);
-    const maxH = Math.round(window.innerHeight * 0.7);
-    this.modalScale = Math.min(1, Math.min(maxW / this.state.w, maxH / this.state.h));
-    const cw = Math.max(200, Math.round(this.state.w * this.modalScale));
-    const ch = Math.max(120, Math.round(this.state.h * this.modalScale));
-    this.cropCanvas.width = cw;
-    this.cropCanvas.height = ch;
-    const ctx = this.cropCanvas.getContext('2d');
-    ctx.clearRect(0, 0, cw, ch);
-    ctx.drawImage(this.origCanvas, 0, 0, this.state.w, this.state.h, 0, 0, cw, ch);
-    this.modalSelection = null;
-    this.modalDragging = false;
-    this.openModal(this.cropModal);
-  }
-
-  openRotateModal() {
-    if (!this.image.src) { alert('Load an image before rotating'); return; }
-    const maxW = Math.round(window.innerWidth * 0.8);
-    const maxH = Math.round(window.innerHeight * 0.7);
-    const scale = Math.min(1, Math.min(maxW / this.state.w, maxH / this.state.h));
-    const cw = Math.max(200, Math.round(this.state.w * scale));
-    const ch = Math.max(120, Math.round(this.state.h * scale));
-    this.rotateCanvas.width = cw;
-    this.rotateCanvas.height = ch;
-    this.rotateAngleInput.value = 0;
-    this.rotateAngleVal.textContent = '0';
-    this.updateRotatePreview();
-    this.openModal(this.rotateModal);
-  }
-
-  handleCropMouseDown(e) {
-    const rect = this.cropCanvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    this.modalSelection = { x, y, w: 0, h: 0 };
-    this.modalDragging = true;
-  }
-
-  handleCropTouchStart(e) {
-    if (!e.touches?.length) return;
-    const t = e.touches[0];
-    const rect = this.cropCanvas.getBoundingClientRect();
-    const x = t.clientX - rect.left;
-    const y = t.clientY - rect.top;
-    this.modalSelection = { x, y, w: 0, h: 0 };
-    this.modalDragging = true;
-    e.preventDefault();
-  }
-
-  handleModalMouseMove(e) {
-    if (!this.modalDragging || !this.modalSelection) return;
-    const rect = this.cropCanvas.getBoundingClientRect();
-    if (!rect.width) return;
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    this.modalSelection.w = x - this.modalSelection.x;
-    this.modalSelection.h = y - this.modalSelection.y;
-    this.redrawCropModal();
-  }
-
-  handleModalTouchMove(e) {
-    if (!this.modalDragging || !this.modalSelection) return;
-    if (!e.touches?.length) return;
-    const t = e.touches[0];
-    const rect = this.cropCanvas.getBoundingClientRect();
-    const x = t.clientX - rect.left;
-    const y = t.clientY - rect.top;
-    this.modalSelection.w = x - this.modalSelection.x;
-    this.modalSelection.h = y - this.modalSelection.y;
-    this.redrawCropModal();
-    e.preventDefault();
-  }
-
-  handleModalMouseUp() {
-    if (!this.modalDragging) return;
-    this.modalDragging = false;
-    this.normalizeCropSelection();
-    this.redrawCropModal();
-  }
-
-  handleModalTouchEnd(e) {
-    if (!this.modalDragging) return;
-    this.modalDragging = false;
-    this.normalizeCropSelection();
-    this.redrawCropModal();
-    e.preventDefault();
-  }
-
-  normalizeCropSelection() {
-    if (!this.modalSelection) return;
-    if (this.modalSelection.w < 0) {
-      this.modalSelection.x += this.modalSelection.w;
-      this.modalSelection.w = -this.modalSelection.w;
-    }
-    if (this.modalSelection.h < 0) {
-      this.modalSelection.y += this.modalSelection.h;
-      this.modalSelection.h = -this.modalSelection.h;
-    }
-    this.modalSelection.x = Math.max(0, Math.min(this.modalSelection.x, this.cropCanvas.width));
-    this.modalSelection.y = Math.max(0, Math.min(this.modalSelection.y, this.cropCanvas.height));
-    this.modalSelection.w = Math.max(0, Math.min(this.modalSelection.w, this.cropCanvas.width - this.modalSelection.x));
-    this.modalSelection.h = Math.max(0, Math.min(this.modalSelection.h, this.cropCanvas.height - this.modalSelection.y));
-    if (this.modalSelection.w < 4 || this.modalSelection.h < 4) this.modalSelection = null;
-  }
-
-  redrawCropModal() {
-    const ctx = this.cropCanvas.getContext('2d');
-    ctx.clearRect(0, 0, this.cropCanvas.width, this.cropCanvas.height);
-    ctx.drawImage(this.origCanvas, 0, 0, this.state.w, this.state.h, 0, 0, this.cropCanvas.width, this.cropCanvas.height);
-    if (this.modalSelection) {
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(0, 0, this.cropCanvas.width, this.cropCanvas.height);
-      ctx.rect(this.modalSelection.x, this.modalSelection.y, this.modalSelection.w, this.modalSelection.h);
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.36)';
-      try { ctx.fill('evenodd'); } catch (e) { ctx.fill(); }
-      ctx.strokeStyle = '#72f1ff';
-      ctx.lineWidth = 2;
-      ctx.strokeRect(this.modalSelection.x + 0.5, this.modalSelection.y + 0.5, this.modalSelection.w - 1, this.modalSelection.h - 1);
-      ctx.restore();
-    }
-  }
-
   applyCrop() {
-    if (!this.modalSelection) { alert('Select an area to crop'); return; }
-    const ox = Math.max(0, Math.floor(this.modalSelection.x / this.modalScale));
-    const oy = Math.max(0, Math.floor(this.modalSelection.y / this.modalScale));
-    const ow = Math.max(1, Math.floor(this.modalSelection.w / this.modalScale));
-    const oh = Math.max(1, Math.floor(this.modalSelection.h / this.modalScale));
+    const it = this.sel(), s = this.cropSel;
+    if (!it || !s || s.w < 4 || s.h < 4) { this.closeModal(this.cropModal); return; }
+    const c = it.crop, W = this.cropCanvas.width, H = this.cropCanvas.height, mx = W / c.w, my = H / c.h;
+    const sx = it.fx < 0 ? W - (s.x + s.w) : s.x, sy = it.fy < 0 ? H - (s.y + s.h) : s.y;
+    const nc = { x: c.x + sx / mx, y: c.y + sy / my, w: s.w / mx, h: s.h / my };
+    const kx = it.w / c.w, ky = it.h / c.h;
+    // keep the kept pixels where they were on the board
+    const vx = (nc.x + nc.w / 2 - c.x - c.w / 2) * kx * it.fx, vy = (nc.y + nc.h / 2 - c.y - c.h / 2) * ky * it.fy, a = rad(it.angle);
     this.pushHistory();
-    const tmp = document.createElement('canvas');
-    tmp.width = ow;
-    tmp.height = oh;
-    tmp.getContext('2d').drawImage(this.origCanvas, ox, oy, ow, oh, 0, 0, ow, oh);
-    this.image = new Image();
-    this.image.onload = () => {
-      this.state.w = tmp.width;
-      this.state.h = tmp.height;
-      this.selection = null;
-      this.originalIntrinsic = { w: tmp.width, h: tmp.height };
-      this.drawOriginal();
-      this.updatePreview();
-      this.closeModal(this.cropModal);
-      this.updateStatus(`Image cropped: ${this.state.w}×${this.state.h}`);
-      this.saveSession();
-    };
-    this.image.src = tmp.toDataURL();
+    it.x += vx * Math.cos(a) - vy * Math.sin(a);
+    it.y += vx * Math.sin(a) + vy * Math.cos(a);
+    it.w = nc.w * kx; it.h = nc.h * ky; it.crop = nc;
+    this.closeModal(this.cropModal);
+    this.changed('Image cropped');
   }
 
-  largestRotatedRect(w, h, angleRad) {
-    let angle = Math.abs(angleRad);
-    if (angle > Math.PI / 2) angle = Math.PI - angle;
-    const sin = Math.abs(Math.sin(angle));
-    const cos = Math.abs(Math.cos(angle));
-    const widthIsLonger = w >= h;
-    const sideLong = widthIsLonger ? w : h;
-    const sideShort = widthIsLonger ? h : w;
-    let wr, hr;
-    if (sideShort <= 2 * sin * cos * sideLong) {
-      const x = 0.5 * sideShort;
-      if (widthIsLonger) { wr = x / sin; hr = x / cos; }
-      else { wr = x / cos; hr = x / sin; }
-    } else {
-      const cos2MinusSin2 = (cos * cos) - (sin * sin);
-      wr = (w * cos - h * sin) / cos2MinusSin2;
-      hr = (h * cos - w * sin) / cos2MinusSin2;
-    }
-    return { width: Math.floor(Math.abs(wr)), height: Math.floor(Math.abs(hr)) };
+  /* ---------- Free rotation modal (selected image only) ---------- */
+  openRotate() {
+    const it = this.need(); if (!it) return;
+    const a = Math.round(((it.angle % 360) + 540) % 360 - 180);
+    this.rotateAngle.value = a;
+    const size = Math.round(Math.max(240, Math.min(innerWidth * 0.8, innerHeight * 0.5, 640)));
+    this.rotateCanvas.width = this.rotateCanvas.height = size;
+    this.drawRotate(); this.openModal(this.rotateModal);
   }
-
-  updateRotatePreview() {
-    const angle = parseInt(this.rotateAngleInput?.value || 0, 10);
-    this.rotateAngleVal.textContent = angle;
-    const ctx = this.rotateCanvas.getContext('2d');
-    ctx.clearRect(0, 0, this.rotateCanvas.width, this.rotateCanvas.height);
-    ctx.save();
-    ctx.translate(this.rotateCanvas.width / 2, this.rotateCanvas.height / 2);
-    ctx.rotate(angle * Math.PI / 180);
-    const scale = Math.min(1, Math.min((this.rotateCanvas.width * 0.8) / this.state.w, (this.rotateCanvas.height * 0.8) / this.state.h));
-    ctx.drawImage(this.origCanvas, -this.state.w * scale / 2, -this.state.h * scale / 2, this.state.w * scale, this.state.h * scale);
-    ctx.restore();
-    try {
-      const rad = angle * Math.PI / 180;
-      const rect = this.largestRotatedRect(this.state.w, this.state.h, rad);
-      const scale2 = Math.min(1, Math.min((this.rotateCanvas.width * 0.8) / this.state.w, (this.rotateCanvas.height * 0.8) / this.state.h));
-      const cropW = rect.width * scale2;
-      const cropH = rect.height * scale2;
-      const cx = this.rotateCanvas.width / 2;
-      const cy = this.rotateCanvas.height / 2;
-      ctx.beginPath();
-      ctx.rect(0, 0, this.rotateCanvas.width, this.rotateCanvas.height);
-      ctx.rect(cx - cropW / 2, cy - cropH / 2, cropW, cropH);
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.36)';
-      try { ctx.fill('evenodd'); } catch (e) { ctx.fill(); }
-      ctx.strokeStyle = '#72f1ff';
-      ctx.lineWidth = 2;
-      ctx.strokeRect(Math.round(cx - cropW / 2 + 0.5), Math.round(cy - cropH / 2 + 0.5), Math.max(0, Math.round(cropW - 1)), Math.max(0, Math.round(cropH - 1)));
-    } catch (e) { /* ignore */ }
+  drawRotate() {
+    const it = this.sel(); if (!it) return;
+    const a = parseInt(this.rotateAngle.value, 10), cv = this.rotateCanvas, x = cv.getContext('2d');
+    this.rotateAngleVal.textContent = a;
+    const k = Math.min(2, cv.width / Math.hypot(it.w, it.h));
+    x.clearRect(0, 0, cv.width, cv.height);
+    x.save(); x.translate(cv.width / 2, cv.height / 2); x.rotate(rad(a)); x.scale(it.fx, it.fy);
+    x.drawImage(this.sources.get(it.src), it.crop.x, it.crop.y, it.crop.w, it.crop.h, -it.w * k / 2, -it.h * k / 2, it.w * k, it.h * k);
+    x.restore();
   }
-
   applyRotate() {
-    const angle = parseInt(this.rotateAngleInput?.value || 0, 10);
-    if (angle === 0) { this.closeModal(this.rotateModal); return; }
-    this.pushHistory();
-    const rad = angle * Math.PI / 180;
-    const w = this.state.w;
-    const h = this.state.h;
-    const tmp = document.createElement('canvas');
-    const absW = Math.abs(w * Math.cos(rad)) + Math.abs(h * Math.sin(rad));
-    const absH = Math.abs(w * Math.sin(rad)) + Math.abs(h * Math.cos(rad));
-    tmp.width = Math.ceil(absW);
-    tmp.height = Math.ceil(absH);
-    const ctx = tmp.getContext('2d');
-    ctx.translate(tmp.width / 2, tmp.height / 2);
-    ctx.rotate(rad);
-    ctx.drawImage(this.origCanvas, -w / 2, -h / 2);
-    const rect = this.largestRotatedRect(w, h, rad);
-    const cropW = rect.width;
-    const cropH = rect.height;
-    const offsetX = Math.floor((tmp.width - cropW) / 2);
-    const offsetY = Math.floor((tmp.height - cropH) / 2);
-    const cropped = document.createElement('canvas');
-    cropped.width = cropW;
-    cropped.height = cropH;
-    cropped.getContext('2d').drawImage(tmp, offsetX, offsetY, cropW, cropH, 0, 0, cropW, cropH);
-    this.image = new Image();
-    this.image.onload = () => {
-      this.state.w = cropped.width;
-      this.state.h = cropped.height;
-      this.selection = null;
-      this.originalIntrinsic = { w: cropped.width, h: cropped.height };
-      this.drawOriginal();
-      this.updatePreview();
-      this.closeModal(this.rotateModal);
-      this.updateStatus(`Image rotated: ${angle}°`);
-      this.saveSession();
-    };
-    this.image.src = cropped.toDataURL();
+    const it = this.sel(); if (!it) return;
+    this.pushHistory(); it.angle = parseInt(this.rotateAngle.value, 10);
+    this.closeModal(this.rotateModal);
+    this.changed(`Rotated to ${it.angle}°`);
   }
 
+  /* ---------- Binary size + export (unchanged RLE logic) ---------- */
   computeBinarySize() {
-    if (!this.image.src) return 0;
-    const ncolors = parseInt(this.colorsRange?.value || 16, 10);
-    const invert = this.invertChk?.checked || false;
-    const w = this.previewCanvas.width;
-    const h = this.previewCanvas.height;
-    const imgd = this.previewCtx.getImageData(0, 0, w, h).data;
+    if (!this.items.length) return 0;
+    const ncolors = parseInt(this.colors.value || 16, 10), invert = this.invert.checked;
+    const w = this.preview.width, h = this.preview.height;
+    const imgd = this.pctx.getImageData(0, 0, w, h).data;
     let size = 0;
     for (let y = 0; y < h; y++) {
       for (let xChunk = 0; xChunk < w; xChunk += 320) {
@@ -553,47 +498,37 @@ class ImageEditor {
     }
     return size;
   }
-
-  updateBinarySize() {
-    const size = this.computeBinarySize();
-    if (this.binSizeEl) this.binSizeEl.textContent = this.formatFileSize(size);
-  }
-
   formatFileSize(bytes) {
     if (!bytes) return '0 o';
-    const thresh = 1024;
-    if (Math.abs(bytes) < thresh) return bytes + ' o';
-    const units = ['ko', 'Mo', 'Go', 'To', 'Po', 'Eo', 'Zo', 'Yo'];
-    let u = -1;
-    do { bytes /= thresh; ++u; } while (Math.abs(bytes) >= thresh && u < units.length - 1);
+    if (Math.abs(bytes) < 1024) return bytes + ' o';
+    const units = ['ko', 'Mo', 'Go']; let u = -1;
+    do { bytes /= 1024; ++u; } while (Math.abs(bytes) >= 1024 && u < units.length - 1);
     return bytes.toFixed(1) + ' ' + units[u];
   }
-
+  download(blob, name) {
+    const url = URL.createObjectURL(blob), a = document.createElement('a');
+    a.href = url; a.download = name; a.click(); URL.revokeObjectURL(url);
+  }
   exportBinary() {
-    if (!this.image.src) { alert('Load an image'); return; }
+    if (!this.items.length) { alert('Add an image first'); return; }
     this.updatePreview();
-    const ncolors = parseInt(this.colorsRange?.value || 16, 10);
-    const invert = this.invertChk?.checked || false;
-    const w = this.previewCanvas.width;
-    const h = this.previewCanvas.height;
-    const imgd = this.previewCtx.getImageData(0, 0, w, h).data;
+    const ncolors = parseInt(this.colors.value || 16, 10), invert = this.invert.checked;
+    const w = this.preview.width, h = this.preview.height;
+    const imgd = this.pctx.getImageData(0, 0, w, h).data;
     const indices = [];
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
-        const i = (y * w + x) * 4;
-        const intensity = imgd[i];
+        const intensity = imgd[(y * w + x) * 4];
         let idx = Math.round(intensity / 255 * (ncolors - 1));
         if (invert) idx = (ncolors - 1) - idx;
-        const mapped = Math.round(idx / (ncolors - 1) * 15);
-        indices.push(mapped & 0x0F);
+        indices.push(Math.round(idx / (ncolors - 1) * 15) & 0x0F);
       }
     }
     const out = [];
     for (let y = 0; y < h; y++) {
       for (let xChunk = 0; xChunk < w; xChunk += 320) {
         const xEnd = Math.min(xChunk + 320, w);
-        let cur = indices[y * w + xChunk];
-        let run = 1;
+        let cur = indices[y * w + xChunk], run = 1;
         for (let x = xChunk + 1; x < xEnd; x++) {
           const v = indices[y * w + x];
           if (v === cur && run < 16) run++; else { out.push(((run - 1) & 0x0F) << 4 | (cur & 0x0F)); cur = v; run = 1; }
@@ -601,1029 +536,40 @@ class ImageEditor {
         if (run > 0) out.push(((run - 1) & 0x0F) << 4 | (cur & 0x0F));
       }
     }
-    const u8 = new Uint8Array(out);
-    const blob = new Blob([u8], { type: 'application/octet-stream' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'input.bin';
-    a.click();
-    URL.revokeObjectURL(url);
+    this.download(new Blob([new Uint8Array(out)], { type: 'application/octet-stream' }), 'input.bin');
     this.updateStatus('Binary file exported');
   }
-
   exportPreviewPng() {
-    if (!this.image.src) { alert('Load an image'); return; }
-    this.previewCanvas.toBlob(blob => {
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'preview.png';
-      a.click();
-      URL.revokeObjectURL(url);
-      this.updateStatus('PNG preview exported');
-    });
+    if (!this.items.length) { alert('Add an image first'); return; }
+    this.updatePreview();
+    this.preview.toBlob((b) => { this.download(b, 'preview.png'); this.updateStatus('PNG preview exported'); });
   }
 
-  undo() {
-    if (this.history.length <= 0) return;
-    try { if (this.image.src) this.redoStack.push({ src: this.origCanvas.toDataURL(), w: this.state.w, h: this.state.h, originalIntrinsic: this.originalIntrinsic }); } catch (e) { /* ignore */ }
-    const last = this.history.pop();
-    if (!last) return;
-    this.image = new Image();
-    this.image.onload = () => {
-      this.state.w = last.w;
-      this.state.h = last.h;
-      if (last.originalIntrinsic) this.originalIntrinsic = last.originalIntrinsic;
-      this.selection = null;
-      this.drawOriginal();
-      this.updatePreview();
-      this.updateStatus('Undo completed');
-      this.saveSession();
-    };
-    this.image.src = last.src;
-  }
-
-  redo() {
-    if (this.redoStack.length <= 0) return;
-    try { if (this.image.src) this.history.push({ src: this.origCanvas.toDataURL(), w: this.state.w, h: this.state.h, originalIntrinsic: this.originalIntrinsic }); } catch (e) { /* ignore */ }
-    const next = this.redoStack.pop();
-    if (!next) return;
-    this.image = new Image();
-    this.image.onload = () => {
-      this.state.w = next.w;
-      this.state.h = next.h;
-      if (next.originalIntrinsic) this.originalIntrinsic = next.originalIntrinsic;
-      this.selection = null;
-      this.drawOriginal();
-      this.updatePreview();
-      this.updateStatus('Redo completed');
-      this.saveSession();
-    };
-    this.image.src = next.src;
-  }
-
-  updateMagnifier(e) {
-    if (!this.image.src || !this.lensCtx) return;
-    const rect = this.previewWrap.getBoundingClientRect();
-    const x = (e.clientX - rect.left) * (this.previewCanvas.width / rect.width);
-    const y = (e.clientY - rect.top) * (this.previewCanvas.height / rect.height);
-    const LENS_SIZE = this.lensCanvas.width;
-    const LENS_ZOOM = 2.5;
-    const srcW = LENS_SIZE / LENS_ZOOM;
-    const srcH = srcW;
-    let sx = x - srcW / 2;
-    let sy = y - srcH / 2;
-    sx = Math.max(0, Math.min(sx, this.previewCanvas.width - srcW));
-    sy = Math.max(0, Math.min(sy, this.previewCanvas.height - srcH));
-    this.lensCtx.clearRect(0, 0, LENS_SIZE, LENS_SIZE);
-    this.lensCtx.drawImage(this.previewCanvas, sx, sy, srcW, srcH, 0, 0, LENS_SIZE, LENS_SIZE);
-    this.lensCanvas.style.left = (e.clientX - rect.left) + 'px';
-    this.lensCanvas.style.top = (e.clientY - rect.top) + 'px';
-    this.lensCanvas.classList.add('active');
-  }
-
-  showMagnifier() { if (this.lensCanvas) this.lensCanvas.classList.add('active'); }
-  hideMagnifier() { if (this.lensCanvas) this.lensCanvas.classList.remove('active'); }
-  handleKeyboard(e) {
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); this.undo(); }
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); this.exportBinary(); }
-  }
-  handleResize() { this.updateOrigDisplay(); this.updatePreviewDisplay(); }
-  openModal(modal) { modal.setAttribute('aria-hidden', 'false'); }
-  closeModal(modal) { modal.setAttribute('aria-hidden', 'true'); this.modalSelection = null; }
-  updateStatus(text) { if (this.statusText) this.statusText.textContent = text; }
-
-  saveSession() {
+  /* ---------- Session ---------- */
+  scheduleSave() { clearTimeout(this.st); this.st = setTimeout(() => this.save(), 500); }
+  save() {
     try {
-      if (!this.origCanvas) return;
-      const data = { image: this.origCanvas.toDataURL('image/jpeg', 0.8), state: { w: this.state.w, h: this.state.h }, originalIntrinsic: this.originalIntrinsic, colors: this.colorsRange?.value, size: this.sizeRange?.value, invert: this.invertChk?.checked, timestamp: Date.now() };
-      localStorage.setItem('Cheatsheet:session', JSON.stringify(data));
-    } catch (e) {
-      try {
-        const small = { image: data.image, state: data.state, originalIntrinsic: data.originalIntrinsic, timestamp: Date.now() };
-        localStorage.setItem('Cheatsheet:session', JSON.stringify(small));
-      } catch (e2) { /* give up */ }
-    }
+      const sources = {};
+      this.items.forEach((it) => { sources[it.src] = this.sources.get(it.src).toDataURL('image/jpeg', 0.85); });
+      localStorage.setItem(KEY, JSON.stringify({ sources, items: this.items, nextId: this.nextId, colors: this.colors.value, size: this.sizeRange.value, invert: this.invert.checked }));
+    } catch (e) { /* storage full: skip */ }
   }
-
-  loadSession() {
+  async restore() {
     try {
-      const raw = localStorage.getItem('Cheatsheet:session');
-      if (!raw) { this.updateSizeValue(); return; }
-      const data = JSON.parse(raw);
-      if (!data?.image) { this.updateSizeValue(); return; }
-      this.image = new Image();
-      this.image.onload = () => {
-        this.state.w = data.state?.w || this.image.width;
-        this.state.h = data.state?.h || this.image.height;
-        this.originalIntrinsic = data.originalIntrinsic || { w: this.state.w, h: this.state.h };
-        this.selection = null;
-        this.history.length = 0;
-        this.drawOriginal();
-        if (this.colorsRange && data.colors) this.colorsRange.value = data.colors;
-        if (this.sizeRange && data.size) this.sizeRange.value = data.size;
-        if (this.invertChk) this.invertChk.checked = !!data.invert;
-        this.updateColorValue();
-        this.updateSizeValue();
-        this.updatePreview();
-        this.previewCanvas.classList.remove('hidden');
-        this.updateStatus('Session restored');
-      };
-      this.image.src = data.image;
-    } catch (e) { this.updateSizeValue(); }
+      const d = JSON.parse(localStorage.getItem(KEY) || 'null'); if (!d) return;
+      for (const [id, url] of Object.entries(d.sources || {})) {
+        const img = await this.loadImage(url), c = document.createElement('canvas');
+        c.width = img.naturalWidth; c.height = img.naturalHeight; c.getContext('2d').drawImage(img, 0, 0);
+        this.sources.set(id, c);
+      }
+      this.items = (d.items || []).filter((i) => this.sources.has(i.src));
+      this.nextId = d.nextId || 1;
+      if (d.colors) this.colors.value = d.colors;
+      if (d.size) this.sizeRange.value = d.size;
+      this.invert.checked = !!d.invert;
+    } catch (e) { /* ignore corrupt session */ }
   }
 }
 
-document.addEventListener('DOMContentLoaded', () => { new ImageEditor(); });
-// Simple client-side image editor + RLE binary export
-(function(){
-  const fileEl = document.getElementById('file');
-  const orig = document.getElementById('orig');
-  const prev = document.getElementById('preview');
-  const rotateBtn = document.getElementById('rotateBtn');
-  const rotateCustomBtn = document.getElementById('rotateCustomBtn');
-  const flipHBtn = document.getElementById('flipHBtn');
-  const flipVBtn = document.getElementById('flipVBtn');
-  const cropBtn = document.getElementById('cropBtn');
-  const cropModal = document.getElementById('cropModal');
-  const cropCanvas = document.getElementById('cropCanvas');
-  const cropConfirm = document.getElementById('cropConfirm');
-  const cropCancel = document.getElementById('cropCancel');
-  const rotateModal = document.getElementById('rotateModal');
-  const rotateCanvas = document.getElementById('rotateCanvas');
-  const rotateAngleInput = document.getElementById('rotateAngle');
-  const rotateAngleVal = document.getElementById('rotateAngleVal');
-  const rotateConfirm = document.getElementById('rotateConfirm');
-  const rotateCancel = document.getElementById('rotateCancel');
-  const colorsRange = document.getElementById('colors');
-  const colorsVal = document.getElementById('colorsVal');
-  const invertChk = document.getElementById('invert');
-  const sizeRange = document.getElementById('sizeRange');
-  const sizeVal = document.getElementById('sizeVal');
-  const downloadBtn = document.getElementById('downloadBtn');
-  const downloadPreviewBtn = document.getElementById('downloadPreviewBtn');
-  const undoBtn = document.getElementById('undoBtn');
-  const redoBtn = document.getElementById('redoBtn');
-  const binSizeEl = document.getElementById('binSize');
-
-  const octx = orig.getContext('2d');
-  const pctx = prev.getContext('2d');
-  const lens = document.getElementById('lens');
-  const lctx = lens ? lens.getContext('2d') : null;
-  const previewWrap = document.querySelector('.preview-wrap');
-  const origWrap = document.querySelector('.orig-wrap');
-  const LENS_SIZE = lens ? lens.width : 200;
-  const LENS_ZOOM = 2.5;
-  const openBtn = document.getElementById('openBtn');
-
-  if(sizeRange && sizeVal) sizeVal.textContent = sizeRange.value;
-  let previewDisplayScale = 1; // display scale of preview (internal px -> CSS px)
-  let previewSizeEl = document.getElementById('previewSize');
-
-  // preview size badge element (displayed next to "Preview (quantized)")
-  if (!previewSizeEl) {
-      previewSizeEl = document.createElement('span');
-      previewSizeEl.id = 'previewSize';
-      previewWrap.appendChild(previewSizeEl);
-  }
-
-  function clientToCanvasPreview(clientX, clientY){
-    const r = prev.getBoundingClientRect();
-    const scaleX = prev.width / r.width;
-    const scaleY = prev.height / r.height;
-    return { x: (clientX - r.left) * scaleX, y: (clientY - r.top) * scaleY, relX: clientX - r.left, relY: clientY - r.top };
-  }
-
-  let img = new Image();
-  let state = {w:orig.width,h:orig.height,angle:0};
-  const history = [];
-  let redoStack = [];
-  let initialIntrinsic = null; // store initial file dimensions (never overwritten)
-  let originalIntrinsic = null; // store current image intrinsic (updated on edits)
-  let originalFileSize = null;
-
-  // hide preview on startup (show when image is loaded)
-  if(prev) prev.classList.add('hidden');
-
-  // --- Session persistence (localStorage) ---
-  const SESSION_KEY = 'Cheatsheet:lastSession';
-
-  function saveSession(){
-    try{
-      if(!orig) return;
-      // Prepare lightweight copies of history and redo stacks to avoid blowing localStorage
-      function serializeStack(stack){
-        try{
-          if(!Array.isArray(stack) || stack.length===0) return [];
-          const max = 6; // keep only last 6 states
-          const out = [];
-          for(let i=Math.max(0, stack.length-max); i<stack.length; i++){
-            const it = stack[i];
-            if(!it || !it.src) continue;
-            // only include reasonably-sized data URLs (skip huge ones)
-            // allow larger threshold because we store as JPEG where possible
-            if(it.src.length > 900000) continue;
-            out.push({ src: it.src, w: it.w, h: it.h, originalIntrinsic: it.originalIntrinsic });
-          }
-          return out;
-        }catch(e){ return []; }
-      }
-
-      const data = {
-        // use JPEG for session image to reduce size and increase chance of saving
-        image: (function(){ try{ return orig.toDataURL('image/jpeg', 0.8); }catch(e){ return orig.toDataURL(); } })(),
-        state: { w: state.w, h: state.h },
-        originalIntrinsic: originalIntrinsic,
-        colors: colorsRange ? colorsRange.value : null,
-          size: sizeRange ? sizeRange.value : null,
-        invert: invertChk ? invertChk.checked : false,
-        history: serializeStack(history),
-        redoStack: serializeStack(redoStack),
-        timestamp: Date.now()
-      };
-      try{
-        localStorage.setItem(SESSION_KEY, JSON.stringify(data));
-      }catch(e){
-        // If storage quota exceeded, attempt a smaller save without stacks
-        const small = { image: data.image, state: data.state, originalIntrinsic: data.originalIntrinsic, colors: data.colors, invert: data.invert, timestamp: data.timestamp };
-        try{ localStorage.setItem(SESSION_KEY, JSON.stringify(small)); }catch(e2){ /* give up */ }
-      }
-    }catch(e){ /* ignore */ }
-  }
-
-  function loadSession(){
-    try{
-      const raw = localStorage.getItem(SESSION_KEY);
-      if(!raw) return false;
-      const data = JSON.parse(raw);
-      if(!data || !data.image) return false;
-      img = new Image();
-      img.onload = ()=>{
-        // restore state from saved canvas image
-        state.w = data.state && data.state.w ? data.state.w : img.width;
-        state.h = data.state && data.state.h ? data.state.h : img.height;
-        originalIntrinsic = data.originalIntrinsic || { w: state.w, h: state.h };
-        sel = null;
-        history.length = 0;
-        // restore history/redo stacks if present
-        try{
-          if(Array.isArray(data.history)){
-            history.push(...data.history);
-          }
-          if(Array.isArray(data.redoStack)){
-            redoStack.push(...data.redoStack);
-          }
-        }catch(e){}
-        drawImageToOrig();
-        if(colorsRange && data.colors) colorsRange.value = data.colors;
-        if(colorsVal) colorsVal.textContent = colorsRange.value;
-        if(sizeRange && data.size) sizeRange.value = data.size;
-        if(sizeVal) sizeVal.textContent = sizeRange ? sizeRange.value : '4';
-        if(invertChk) invertChk.checked = !!data.invert;
-        updatePreview();
-        if(prev) prev.classList.remove('hidden');
-      };
-      img.src = data.image;
-      return true;
-    }catch(e){ return false; }
-  }
-
-  function clearSession(){ localStorage.removeItem(SESSION_KEY); }
-
-  function pushHistory(){
-    try{
-      if(!img.src) return;
-      // use JPEG output for history to reduce data URL size for localStorage
-      var dataUrl;
-      try{ dataUrl = orig.toDataURL('image/jpeg', 0.8); }catch(e){ dataUrl = orig.toDataURL(); }
-      history.push({src: dataUrl, w: state.w, h: state.h, originalIntrinsic: originalIntrinsic});
-      // push a new state clears the redo stack
-      redoStack.length = 0;
-      if(history.length>12) history.shift();
-    }catch(e){/* ignore */}
-  }
-
-  // selection for crop
-  let sel = null;
-  let dragging=false, sx=0, sy=0;
-  // modal selection state
-  let modalSel = null;
-  let modalDragging = false;
-  let modalScale = 1;
-
-  function clientToCanvas(clientX, clientY){
-    const r = orig.getBoundingClientRect();
-    const scaleX = orig.width / r.width;
-    const scaleY = orig.height / r.height;
-    return { x: (clientX - r.left) * scaleX, y: (clientY - r.top) * scaleY };
-  }
-
-  function drawImageToOrig(){
-    orig.width = state.w;
-    orig.height = state.h;
-    octx.setTransform(1,0,0,1,0,0);
-    octx.clearRect(0,0,orig.width,orig.height);
-    octx.drawImage(img,0,0,state.w,state.h);
-    drawSelection();
-    // update displayed original size badge (show intrinsic image size when available)
-    try{
-      const origSizeEl = document.getElementById('origSize');
-      if(origSizeEl){
-        // display current image size (after any edits like crop/rotate)
-        origSizeEl.textContent = state.w + '×' + state.h;
-      }
-    }catch(e){}
-    // adjust displayed size to fit its container without stretching
-    updateOrigDisplay();
-  }
-
-  function updateOrigDisplay(){
-    try{
-      if(!origWrap || !orig) return;
-      const wrapRect = origWrap.getBoundingClientRect();
-      const maxW = Math.max(40, wrapRect.width - 12);
-      const maxH = Math.max(40, wrapRect.height - 12);
-      const scale = Math.min(1, Math.min(maxW / state.w, maxH / state.h));
-      orig.style.width = Math.round(state.w * scale) + 'px';
-      orig.style.height = Math.round(state.h * scale) + 'px';
-    }catch(e){}
-  }
-
-  function drawSelection(){
-    if(!sel) return;
-    octx.save();
-    // darken area outside selection using even-odd fill rule
-    octx.beginPath();
-    octx.rect(0,0,orig.width,orig.height);
-    octx.rect(sel.x, sel.y, sel.w, sel.h);
-    octx.fillStyle = 'rgba(0,0,0,0.36)';
-    try{ octx.fill('evenodd'); }catch(e){ octx.fill(); }
-    // selection border
-    octx.strokeStyle = '#72f1ff';
-    octx.lineWidth = Math.max(1, Math.round(Math.min(orig.width, orig.height) / 300));
-    octx.strokeRect(sel.x + 0.5, sel.y + 0.5, sel.w - 1, sel.h - 1);
-    octx.restore();
-  }
-
-  fileEl.addEventListener('change',e=>{
-    const f = e.target.files && e.target.files[0];
-    if(!f) return;
-    originalFileSize = f.size;
-    const url = URL.createObjectURL(f);
-    img = new Image();
-    img.onload = ()=>{
-      // capture intrinsic size from original file load
-      originalIntrinsic = { w: img.naturalWidth || img.width, h: img.naturalHeight || img.height };
-      if(!initialIntrinsic) initialIntrinsic = { w: originalIntrinsic.w, h: originalIntrinsic.h };
-      // use actual image dimensions without constraining
-      state.w = originalIntrinsic.w;
-      state.h = originalIntrinsic.h;
-      state.angle = 0;
-      sel = null;
-      history.length = 0;
-      pushHistory();
-      drawImageToOrig();
-      updatePreview();
-      // show preview (was hidden on startup)
-      if(prev) prev.classList.remove('hidden');
-      // clear redo stack on new load
-      redoStack.length = 0;
-      // save session after loading new file
-      saveSession();
-    };
-    img.src = url;
-  });
-
-  // toolbar interactions
-  if(openBtn){ openBtn.addEventListener('click', ()=> fileEl.click()); }
-
-  // keyboard shortcuts (limited)
-  window.addEventListener('keydown', e=>{
-    if((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z'){ e.preventDefault(); undoBtn.click(); }
-    if((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's'){ e.preventDefault(); downloadBtn.click(); }
-    if(e.key === 'Delete' || e.key === 'Backspace'){ sel = null; drawImageToOrig(); }
-  });
-  window.addEventListener('mouseup', e=>{
-    if(!dragging) return;
-    dragging=false;
-    if(!sel) return;
-    if(sel.w<0){ sel.x += sel.w; sel.w = -sel.w; }
-    if(sel.h<0){ sel.y += sel.h; sel.h = -sel.h; }
-    // clamp to canvas bounds
-    sel.x = Math.max(0, Math.min(sel.x, orig.width));
-    sel.y = Math.max(0, Math.min(sel.y, orig.height));
-    sel.w = Math.max(0, Math.min(sel.w, orig.width - sel.x));
-    sel.h = Math.max(0, Math.min(sel.h, orig.height - sel.y));
-    // cancel too-small selections
-    if(sel.w < 4 || sel.h < 4) sel = null;
-    drawImageToOrig();
-  });
-
-  // open crop modal
-  cropBtn.addEventListener('click', ()=>{
-    if(!img.src) return alert('Chargez une image avant de rogner');
-    // prepare modal canvas scaled to fit viewport
-    const maxW = Math.round(window.innerWidth * 0.8);
-    const maxH = Math.round(window.innerHeight * 0.7);
-    const sw = state.w, sh = state.h;
-    modalScale = Math.min(1, Math.min(maxW / sw, maxH / sh));
-    const cw = Math.max(200, Math.round(sw * modalScale));
-    const ch = Math.max(120, Math.round(sh * modalScale));
-    cropCanvas.width = cw; cropCanvas.height = ch;
-    const cctx = cropCanvas.getContext('2d');
-    cctx.clearRect(0,0,cw,ch);
-    // draw current original image into modal canvas scaled
-    cctx.drawImage(orig, 0, 0, state.w, state.h, 0, 0, cw, ch);
-    // reset modal selection
-    modalSel = null; modalDragging = false;
-    // show modal
-    cropModal.setAttribute('aria-hidden','false');
-  });
-
-  // modal mouse handling for selection
-  if(cropCanvas){
-    const mc = cropCanvas;
-    const mctx = mc.getContext('2d');
-    function redrawModal(){
-      // redraw image
-      mctx.clearRect(0,0,mc.width,mc.height);
-      mctx.drawImage(orig, 0, 0, state.w, state.h, 0, 0, mc.width, mc.height);
-      if(modalSel){
-        mctx.save();
-        mctx.beginPath();
-        mctx.rect(0,0,mc.width,mc.height);
-        mctx.rect(modalSel.x, modalSel.y, modalSel.w, modalSel.h);
-        mctx.fillStyle = 'rgba(0,0,0,0.36)';
-        try{ mctx.fill('evenodd'); }catch(e){ mctx.fill(); }
-        mctx.strokeStyle = '#72f1ff'; mctx.lineWidth = 2;
-        mctx.strokeRect(modalSel.x+0.5, modalSel.y+0.5, modalSel.w-1, modalSel.h-1);
-        mctx.restore();
-      }
-    }
-    mc.addEventListener('mousedown', e=>{
-      const r = mc.getBoundingClientRect();
-      const x = (e.clientX - r.left);
-      const y = (e.clientY - r.top);
-      modalSel = { x: x, y: y, w: 0, h: 0 };
-      modalDragging = true;
-    });
-    // Touch support for mobile: start selection
-    mc.addEventListener('touchstart', e=>{
-      if(!e.touches || e.touches.length===0) return;
-      const t = e.touches[0];
-      const r = mc.getBoundingClientRect();
-      const x = (t.clientX - r.left);
-      const y = (t.clientY - r.top);
-      modalSel = { x: x, y: y, w: 0, h: 0 };
-      modalDragging = true;
-      e.preventDefault();
-    }, { passive: false });
-    window.addEventListener('mousemove', e=>{
-      if(!modalDragging) return;
-      const r = mc.getBoundingClientRect();
-      const x = (e.clientX - r.left);
-      const y = (e.clientY - r.top);
-      modalSel.w = x - modalSel.x; modalSel.h = y - modalSel.y;
-      redrawModal();
-    });
-    // Touch move support while dragging selection
-    window.addEventListener('touchmove', e=>{
-      if(!modalDragging) return;
-      if(!e.touches || e.touches.length===0) return;
-      const t = e.touches[0];
-      const r = mc.getBoundingClientRect();
-      const x = (t.clientX - r.left);
-      const y = (t.clientY - r.top);
-      modalSel.w = x - modalSel.x; modalSel.h = y - modalSel.y;
-      redrawModal();
-      e.preventDefault();
-    }, { passive: false });
-    window.addEventListener('mouseup', e=>{
-      if(!modalDragging) return; modalDragging = false;
-      if(!modalSel) return;
-      if(modalSel.w<0){ modalSel.x += modalSel.w; modalSel.w = -modalSel.w; }
-      if(modalSel.h<0){ modalSel.y += modalSel.h; modalSel.h = -modalSel.h; }
-      // clamp
-      modalSel.x = Math.max(0, Math.min(modalSel.x, mc.width));
-      modalSel.y = Math.max(0, Math.min(modalSel.y, mc.height));
-      modalSel.w = Math.max(0, Math.min(modalSel.w, mc.width - modalSel.x));
-      modalSel.h = Math.max(0, Math.min(modalSel.h, mc.height - modalSel.y));
-      if(modalSel.w < 4 || modalSel.h < 4) modalSel = null;
-      redrawModal();
-    });
-    // Touch end support to finish selection
-    window.addEventListener('touchend', e=>{
-      if(!modalDragging) return; modalDragging = false;
-      if(!modalSel) return;
-      if(modalSel.w<0){ modalSel.x += modalSel.w; modalSel.w = -modalSel.w; }
-      if(modalSel.h<0){ modalSel.y += modalSel.h; modalSel.h = -modalSel.h; }
-      // clamp
-      modalSel.x = Math.max(0, Math.min(modalSel.x, mc.width));
-      modalSel.y = Math.max(0, Math.min(modalSel.y, mc.height));
-      modalSel.w = Math.max(0, Math.min(modalSel.w, mc.width - modalSel.x));
-      modalSel.h = Math.max(0, Math.min(modalSel.h, mc.height - modalSel.y));
-      if(modalSel.w < 4 || modalSel.h < 4) modalSel = null;
-      redrawModal();
-      e.preventDefault();
-    }, { passive: false });
-  }
-
-  // modal controls
-  if(cropCancel){ cropCancel.addEventListener('click', ()=>{ cropModal.setAttribute('aria-hidden','true'); modalSel=null; }); }
-  if(cropConfirm){
-    cropConfirm.addEventListener('click', ()=>{
-      if(!modalSel){ alert('Sélectionnez une zone à rogner'); return; }
-      // map modal selection back to original image coords
-      const ox = Math.max(0, Math.floor(modalSel.x / modalScale));
-      const oy = Math.max(0, Math.floor(modalSel.y / modalScale));
-      const ow = Math.max(1, Math.floor(modalSel.w / modalScale));
-      const oh = Math.max(1, Math.floor(modalSel.h / modalScale));
-      pushHistory();
-      const tmp = document.createElement('canvas'); tmp.width = ow; tmp.height = oh;
-      tmp.getContext('2d').drawImage(orig, ox, oy, ow, oh, 0,0, ow, oh);
-      img = new Image(); img.onload = ()=>{ state.w = tmp.width; state.h = tmp.height; sel=null; originalIntrinsic = {w: tmp.width, h: tmp.height}; drawImageToOrig(); updatePreview(); cropModal.setAttribute('aria-hidden','true'); };
-      img.src = tmp.toDataURL();
-      // save session after crop
-      setTimeout(saveSession, 50);
-    });
-  }
-
-  rotateBtn.addEventListener('click', ()=>{
-    // rotate 90° clockwise
-    pushHistory();
-    const tmp = document.createElement('canvas');
-    tmp.width = state.h; tmp.height = state.w;
-    const tctx = tmp.getContext('2d');
-    tctx.translate(tmp.width/2,tmp.height/2);
-    tctx.rotate(Math.PI/2);
-    tctx.drawImage(orig, -state.w/2, -state.h/2);
-    img = new Image(); img.onload = ()=>{ state.w = tmp.width; state.h = tmp.height; sel=null; originalIntrinsic = {w: tmp.width, h: tmp.height}; drawImageToOrig(); updatePreview(); }; img.src = tmp.toDataURL();
-    // save session after rotate
-    setTimeout(saveSession, 50);
-  });
-
-  // flip horizontal
-  if(flipHBtn){
-    flipHBtn.addEventListener('click', ()=>{
-      if(!img.src) return alert('Chargez une image avant de retourner');
-      pushHistory();
-      const tmp = document.createElement('canvas');
-      tmp.width = state.w; tmp.height = state.h;
-      const tctx = tmp.getContext('2d');
-      tctx.translate(tmp.width, 0);
-      tctx.scale(-1, 1);
-      tctx.drawImage(orig, 0, 0);
-      img = new Image(); img.onload = ()=>{ sel=null; originalIntrinsic = {w: tmp.width, h: tmp.height}; drawImageToOrig(); updatePreview(); }; img.src = tmp.toDataURL();
-      setTimeout(saveSession, 50);
-    });
-  }
-
-  // flip vertical
-  if(flipVBtn){
-    flipVBtn.addEventListener('click', ()=>{
-      if(!img.src) return alert('Chargez une image avant de retourner');
-      pushHistory();
-      const tmp = document.createElement('canvas');
-      tmp.width = state.w; tmp.height = state.h;
-      const tctx = tmp.getContext('2d');
-      tctx.translate(0, tmp.height);
-      tctx.scale(1, -1);
-      tctx.drawImage(orig, 0, 0);
-      img = new Image(); img.onload = ()=>{ sel=null; originalIntrinsic = {w: tmp.width, h: tmp.height}; drawImageToOrig(); updatePreview(); }; img.src = tmp.toDataURL();
-      setTimeout(saveSession, 50);
-    });
-  }
-
-  // open rotate modal
-  if(rotateCustomBtn){
-    rotateCustomBtn.addEventListener('click', ()=>{
-      if(!img.src) return alert('Chargez une image avant de tourner');
-      // prepare modal canvas
-      const maxW = Math.round(window.innerWidth * 0.8);
-      const maxH = Math.round(window.innerHeight * 0.7);
-      const sw = state.w, sh = state.h;
-      const scale = Math.min(1, Math.min(maxW / sw, maxH / sh));
-      const cw = Math.max(200, Math.round(sw * scale));
-      const ch = Math.max(120, Math.round(sh * scale));
-      rotateCanvas.width = cw; rotateCanvas.height = ch;
-      // reset angle
-      rotateAngleInput.value = 0;
-      rotateAngleVal.textContent = '0';
-      // show modal
-      rotateModal.setAttribute('aria-hidden','false');
-      // preview initial
-      redrawRotatePreview(0, scale);
-    });
-  }
-
-  // rotate preview function
-  let rotatePreviewScale = 1;
-  // compute largest axis-aligned rectangle that fits inside a rotated w×h rectangle
-  function largestRotatedRect(w, h, angleRad) {
-    // Normalize angle to first quadrant for correct geometry
-    let angle = Math.abs(angleRad);
-    if (angle > Math.PI / 2) angle = Math.PI - angle;
-
-    const sin = Math.abs(Math.sin(angle));
-    const cos = Math.abs(Math.cos(angle));
-
-    const widthIsLonger = w >= h;
-    const sideLong = widthIsLonger ? w : h;
-    const sideShort = widthIsLonger ? h : w;
-
-    let wr, hr;
-
-    if (sideShort <= 2 * sin * cos * sideLong) {
-      const x = 0.5 * sideShort;
-      if (widthIsLonger) {
-        wr = x / sin;
-        hr = x / cos;
-      } else {
-        wr = x / cos;
-        hr = x / sin;
-      }
-    } else {
-      const cos2MinusSin2 = (cos * cos) - (sin * sin);
-      wr = (w * cos - h * sin) / cos2MinusSin2;
-      hr = (h * cos - w * sin) / cos2MinusSin2;
-    }
-
-    return {
-      width: Math.floor(Math.abs(wr)),
-      height: Math.floor(Math.abs(hr))
-    };
-  }
-  function redrawRotatePreview(angleDeg, scale){
-    if(!rotateCanvas) return;
-    const rctx = rotateCanvas.getContext('2d');
-    rctx.clearRect(0,0,rotateCanvas.width, rotateCanvas.height);
-    rctx.save();
-    rctx.translate(rotateCanvas.width/2, rotateCanvas.height/2);
-    rctx.rotate(angleDeg * Math.PI / 180);
-    rctx.drawImage(orig, 0, 0, state.w, state.h, -state.w * scale / 2, -state.h * scale / 2, state.w * scale, state.h * scale);
-    rctx.restore();
-    // draw crop overlay as a screen-aligned rectangle (not rotated with the image)
-    try{
-      const rad = angleDeg * Math.PI / 180;
-      const rect = largestRotatedRect(state.w, state.h, rad);
-      const cropW = rect.width * scale;
-      const cropH = rect.height * scale;
-      const cx = rotateCanvas.width / 2;
-      const cy = rotateCanvas.height / 2;
-      rctx.beginPath();
-      rctx.rect(0, 0, rotateCanvas.width, rotateCanvas.height);
-      rctx.rect(cx - cropW/2, cy - cropH/2, cropW, cropH);
-      rctx.fillStyle = 'rgba(0,0,0,0.36)';
-      try{ rctx.fill('evenodd'); }catch(e){ rctx.fill(); }
-      rctx.strokeStyle = '#72f1ff';
-      rctx.lineWidth = 2;
-      rctx.strokeRect(Math.round(cx - cropW/2 + 0.5), Math.round(cy - cropH/2 + 0.5), Math.max(0, Math.round(cropW - 1)), Math.max(0, Math.round(cropH - 1)));
-    }catch(e){/* ignore overlay errors */}
-  }
-
-  // rotate modal controls
-  if(rotateAngleInput){
-    rotateAngleInput.addEventListener('input', ()=>{
-      const angle = parseInt(rotateAngleInput.value, 10);
-      rotateAngleVal.textContent = angle;
-      const maxW = Math.round(window.innerWidth * 0.8);
-      const maxH = Math.round(window.innerHeight * 0.7);
-      const sw = state.w, sh = state.h;
-      const scale = Math.min(1, Math.min(maxW / sw, maxH / sh));
-      redrawRotatePreview(angle, scale);
-    });
-  }
-
-  if(rotateCancel){ rotateCancel.addEventListener('click', ()=>{ rotateModal.setAttribute('aria-hidden','true'); }); }
-if (rotateConfirm) {
-  rotateConfirm.addEventListener('click', () => {
-    const angle = parseInt(rotateAngleInput.value, 10);
-    if (angle === 0) {
-      rotateModal.setAttribute('aria-hidden','true');
-      return;
-    }
-
-    pushHistory();
-
-    const rad = angle * Math.PI / 180;
-    const w = state.w;
-    const h = state.h;
-
-    const tmp = document.createElement('canvas');
-
-    const absW = Math.abs(w * Math.cos(rad)) + Math.abs(h * Math.sin(rad));
-    const absH = Math.abs(w * Math.sin(rad)) + Math.abs(h * Math.cos(rad));
-
-    tmp.width = Math.ceil(absW);
-    tmp.height = Math.ceil(absH);
-
-    const tctx = tmp.getContext('2d');
-    tctx.translate(tmp.width / 2, tmp.height / 2);
-    tctx.rotate(rad);
-    tctx.drawImage(orig, -w / 2, -h / 2);
-
-    const rect = largestRotatedRect(w, h, rad);
-
-    const cropW = rect.width;
-    const cropH = rect.height;
-
-    const offsetX = Math.floor((tmp.width - cropW) / 2);
-    const offsetY = Math.floor((tmp.height - cropH) / 2);
-
-    const cropped = document.createElement('canvas');
-    cropped.width = cropW;
-    cropped.height = cropH;
-
-    cropped.getContext('2d').drawImage(
-      tmp,
-      offsetX, offsetY, cropW, cropH,
-      0, 0, cropW, cropH
-    );
-
-    img = new Image();
-    img.onload = () => {
-      state.w = cropped.width;
-      state.h = cropped.height;
-      sel = null;
-      originalIntrinsic = { w: cropped.width, h: cropped.height };
-      drawImageToOrig();
-      updatePreview();
-      rotateModal.setAttribute('aria-hidden','true');
-      // save session after custom rotate+crop applied
-      setTimeout(saveSession, 50);
-    };
-
-    img.src = cropped.toDataURL();
-  });
-}
-
-  // reset button removed from UI; no-op kept for compatibility.
-
-  colorsRange.addEventListener('input', ()=>{ colorsVal.textContent = colorsRange.value; updatePreview(); });
-  invertChk.addEventListener('change', updatePreview);
-  // save palette/invert changes to session
-  if(colorsRange) colorsRange.addEventListener('change', saveSession);
-  if(invertChk) invertChk.addEventListener('change', saveSession);
-  if(sizeRange){
-    sizeRange.addEventListener('input', ()=>{ if(sizeVal) sizeVal.textContent = sizeRange.value; updatePreview(); });
-    sizeRange.addEventListener('change', saveSession);
-  }
-
-  // Note: preview and output are now based on tiles of 320×240 (see updatePreview)
-
-  function updatePreview(){
-    if(!img.src) return;
-    // render a preview for export (internal size) according to sizeRange (tiles of 320x240)
-    const mult = sizeRange ? Math.max(1, Math.min(12, parseInt(sizeRange.value,10)||4)) : 4;
-    const W = 320 * mult, H = 240 * mult;
-    // set internal canvas resolution
-    prev.width = W; prev.height = H;
-    pctx.clearRect(0,0,prev.width,prev.height);
-    // draw the original canvas into the preview scaled to W x H
-    pctx.drawImage(orig, 0, 0, state.w, state.h, 0, 0, W, H);
-    // quantize pixel data
-    const data = pctx.getImageData(0,0,prev.width,prev.height);
-    const ncolors = parseInt(colorsRange.value,10);
-    for(let i=0;i<data.data.length;i+=4){
-      const r=data.data[i], g=data.data[i+1], b=data.data[i+2];
-      let intensity = Math.round((r+g+b)/3);
-      let idx = Math.round(intensity/255*(ncolors-1));
-      if(invertChk.checked) idx = (ncolors-1)-idx;
-      const gray = Math.round(idx/(ncolors-1)*255);
-      data.data[i]=data.data[i+1]=data.data[i+2]=gray;
-    }
-    pctx.putImageData(data,0,0);
-
-    // compute display scale to fit previewWrap without overflowing
-    try{
-      const wrapRect = previewWrap.getBoundingClientRect();
-      const maxW = Math.max(40, wrapRect.width - 12); // padding guard
-      const maxH = Math.max(40, wrapRect.height - 12);
-      const scale = Math.min(1, Math.min(maxW / W, maxH / H));
-      prev.style.width = Math.round(W * scale) + 'px';
-      prev.style.height = Math.round(H * scale) + 'px';
-      previewDisplayScale = scale;
-      // ensure preview size badge exists
-      if(!previewSizeEl){
-        previewSizeEl = document.getElementById('previewSize');
-        if(!previewSizeEl){
-          previewSizeEl = document.createElement('span');
-          previewSizeEl.id = 'previewSize';
-          // try to copy styling from origSize if present so it looks the same
-          const origSizeEl = document.getElementById('origSize');
-          if(origSizeEl) {
-            previewSizeEl.className = origSizeEl.className || '';
-          } else {
-            previewSizeEl.style.position = 'absolute';
-            previewSizeEl.style.top = '6px';
-            previewSizeEl.style.right = '6px';
-            previewSizeEl.style.background = 'rgba(255,255,255,0.9)';
-            previewSizeEl.style.border = '1px solid rgba(0,0,0,0.08)';
-            previewSizeEl.style.padding = '2px 6px';
-            previewSizeEl.style.borderRadius = '4px';
-            previewSizeEl.style.fontSize = '0.9em';
-            previewSizeEl.style.color = '#333';
-            previewSizeEl.style.zIndex = '50';
-          }
-          // ensure previewWrap can position absolutely-placed badge
-          if(previewWrap){
-            const cs = window.getComputedStyle(previewWrap);
-            if(cs.position === 'static') previewWrap.style.position = 'relative';
-            previewWrap.appendChild(previewSizeEl);
-          } else {
-            document.body.appendChild(previewSizeEl);
-          }
-        }
-      }
-      if(previewSizeEl) previewSizeEl.textContent = W + '×' + H;
-      // ensure lens stays on top if visible
-      if(lens) lens.style.display = '';
-    }catch(e){
-      // fallback: allow css to constrain
-      prev.style.width = '';
-      prev.style.height = '';
-    }
-
-    // update binary size info
-    const size = computeBinarySize();
-    if(binSizeEl) binSizeEl.textContent = humanFileSize(size);
-    // update preview size badge (internal canvas size)
-    try { if(previewSizeEl) previewSizeEl.textContent = prev.width + '×' + prev.height; } catch(e) {}
-  }
-
-  // recalc preview display on window resize
-  window.addEventListener('resize', ()=>{ updatePreview(); updateOrigDisplay(); });
-
-  function humanFileSize(bytes){
-    if(!bytes) return '0 o';
-    const thresh = 1024;
-    if(Math.abs(bytes) < thresh) return bytes + ' o';
-    const units = ['ko','Mo','Go','To','Po','Eo','Zo','Yo'];
-    let u = -1; do { bytes /= thresh; ++u; } while(Math.abs(bytes) >= thresh && u < units.length-1);
-    return bytes.toFixed(1)+' '+units[u];
-  }
-
-  function computeBinarySize(){
-    if(!img.src) return 0;
-    const ncolors = parseInt(colorsRange.value,10);
-    const invert = invertChk.checked;
-    const w = prev.width, h = prev.height;
-    const imgd = pctx.getImageData(0,0,w,h).data;
-    let size = 0;
-    for(let y=0;y<h;y++){
-      for(let xChunk=0;xChunk<w;xChunk+=320){
-        const xEnd = Math.min(xChunk+320,w);
-        let cur = Math.round(imgd[(y*w + xChunk)*4]/255*(ncolors-1));
-        if(invert) cur = (ncolors-1)-cur;
-        cur = Math.round(cur/(ncolors-1)*15);
-        let run = 1;
-        for(let x = xChunk+1; x<xEnd; x++){
-          let v = Math.round(imgd[(y*w + x)*4]/255*(ncolors-1));
-          if(invert) v = (ncolors-1)-v;
-          v = Math.round(v/(ncolors-1)*15);
-          if(v === cur && run < 16){ run++; }
-          else{ size++; cur = v; run = 1; }
-        }
-        if(run>0) size++;
-      }
-    }
-    return size;
-  }
-
-  // download binary with RLE per Python spec
-  downloadBtn.addEventListener('click', ()=>{
-    if(!img.src) return alert('Chargez et appliquez la palette (bouton Apply)');
-    // build palette quantization parameters
-    const ncolors = parseInt(colorsRange.value,10);
-    const invert = invertChk.checked;
-    // get pixel data from preview (which is quantized if user applied palette; ensure quantize now)
-    updatePreview();
-    const w = prev.width, h = prev.height;
-    const imgd = pctx.getImageData(0,0,w,h).data;
-    const indices = [];
-    for(let y=0;y<h;y++){
-      for(let x=0;x<w;x++){
-        const i = (y*w + x)*4;
-        const intensity = imgd[i]; // already gray
-        let idx = Math.round(intensity/255*(ncolors-1));
-        if(invert) idx = (ncolors-1)-idx;
-        // map to 0..15 scale (since palette indices expected 0..15)
-        const mapped = Math.round(idx/(ncolors-1)*15);
-        indices.push(mapped & 0x0F);
-      }
-    }
-
-    // RLE encode per row, chunked by 320 pixels
-    const out = [];
-    for(let y=0;y<h;y++){
-      for(let xChunk=0;xChunk<w;xChunk+=320){
-        const xEnd = Math.min(xChunk+320,w);
-        // process this chunk
-        let cur = indices[y*w + xChunk];
-        let run = 1;
-        for(let x = xChunk+1; x<xEnd; x++){
-          const v = indices[y*w + x];
-          if(v === cur && run < 16){ run++; }
-          else{
-            out.push(((run-1)&0x0F)<<4 | (cur&0x0F));
-            cur = v; run = 1;
-          }
-        }
-        if(run>0){ out.push(((run-1)&0x0F)<<4 | (cur&0x0F)); }
-      }
-    }
-
-    const u8 = new Uint8Array(out);
-    const blob = new Blob([u8],{type:'application/octet-stream'});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url; a.download = 'input.bin'; a.click();
-    URL.revokeObjectURL(url);
-  });
-
-  downloadPreviewBtn.addEventListener('click', ()=>{
-    if(!img.src) return alert('Chargez une image');
-    prev.toBlob(blob=>{
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a'); a.href = url; a.download = 'preview.png'; a.click();
-      URL.revokeObjectURL(url);
-    });
-  });
-
-  // magnifier / loupe on preview
-  if(lens && previewWrap && lctx){
-    previewWrap.addEventListener('mousemove', e => {
-      if(!img.src) return;
-      const p = clientToCanvasPreview(e.clientX, e.clientY);
-      // adapt effective zoom based on preview display scale so loupe is usable
-      // use a proportional (not inverse) scaling: when the preview is smaller
-      // the loupe zoom is reduced rather than amplified.
-      const displayScale = Math.max(0.1, (previewDisplayScale || 1));
-      const effectiveZoom = Math.max(1, Math.min(8, 1 + (LENS_ZOOM - 1) * displayScale));
-      const srcW = LENS_SIZE / effectiveZoom;
-      const srcH = srcW;
-      let sx = p.x - srcW/2;
-      let sy = p.y - srcH/2;
-      sx = Math.max(0, Math.min(sx, prev.width - srcW));
-      sy = Math.max(0, Math.min(sy, prev.height - srcH));
-      lctx.clearRect(0,0,lens.width,lens.height);
-      lctx.drawImage(prev, sx, sy, srcW, srcH, 0, 0, lens.width, lens.height);
-      const r = previewWrap.getBoundingClientRect();
-      lens.style.left = (e.clientX - r.left) + 'px';
-      lens.style.top = (e.clientY - r.top) + 'px';
-      lens.style.opacity = '1';
-      lens.style.transform = 'translate(-50%,-50%) scale(1)';
-    });
-    previewWrap.addEventListener('mouseleave', ()=>{
-      lens.style.opacity = '0';
-      lens.style.transform = 'translate(-50%,-50%) scale(0.98)';
-    });
-    previewWrap.addEventListener('mouseenter', ()=>{ lens.style.opacity = '1'; });
-  }
-
-  undoBtn.addEventListener('click', ()=>{
-    if(history.length<=0) return;
-    // save current state to redo
-    try{ if(img.src) redoStack.push({src: orig.toDataURL(), w: state.w, h: state.h, originalIntrinsic: originalIntrinsic}); }catch(e){}
-    const last = history.pop();
-    if(!last) return;
-    img = new Image();
-    img.onload = ()=>{
-      state.w = last.w;
-      state.h = last.h;
-      if(last.originalIntrinsic) originalIntrinsic = last.originalIntrinsic;
-      sel=null; drawImageToOrig(); updatePreview();
-      // save session after undo
-      setTimeout(saveSession, 50);
-    };
-    img.src = last.src;
-  });
-
-  if(redoBtn){
-    redoBtn.addEventListener('click', ()=>{
-      if(redoStack.length<=0) return;
-      // save current state to history (so undo remains possible)
-      try{ if(img.src) history.push({src: orig.toDataURL(), w: state.w, h: state.h, originalIntrinsic: originalIntrinsic}); }catch(e){}
-      const next = redoStack.pop();
-      if(!next) return;
-      img = new Image();
-      img.onload = ()=>{
-        state.w = next.w;
-        state.h = next.h;
-        if(next.originalIntrinsic) originalIntrinsic = next.originalIntrinsic;
-        sel = null; drawImageToOrig(); updatePreview();
-        // save session after redo
-        setTimeout(saveSession, 50);
-      };
-      img.src = next.src;
-    });
-  }
-
-  // initially
-  // try restore last session; fall back to initial preview
-  if(!loadSession()) updatePreview();
-
-  // ensure we persist on unload too
-  window.addEventListener('beforeunload', ()=>{ try{ saveSession(); }catch(e){} });
-
+document.addEventListener('DOMContentLoaded', () => { window.editor = new Editor(); });
 })();

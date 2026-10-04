@@ -8,12 +8,12 @@
 </head>
 <body>
   <div class="app">
-    <input id="fileInput" type="file" accept="image/*" hidden>
+    <input id="fileInput" type="file" accept="image/*" multiple hidden>
 
     <!-- Toolbar -->
     <header class="toolbar">
       <div class="group">
-        <button class="btn primary" id="openBtn">Open image</button>
+        <button class="btn primary" id="openBtn" title="Add one or more images (or drop them on the original)">Add images</button>
       </div>
       <div class="group">
         <button class="btn" id="undoBtn" title="Undo (Ctrl+Z)">Undo</button>
@@ -25,6 +25,11 @@
         <button class="btn" id="rotateCustomBtn">Rotate…</button>
         <button class="btn" id="flipHBtn" title="Flip horizontally">Flip H</button>
         <button class="btn" id="flipVBtn" title="Flip vertically">Flip V</button>
+      </div>
+      <div class="group">
+        <button class="btn" id="frontBtn" title="Bring forward">Forward</button>
+        <button class="btn" id="backBtn" title="Send backward">Backward</button>
+        <button class="btn" id="deleteBtn" title="Remove image (Delete)">Remove</button>
       </div>
       <div class="spacer"></div>
       <div class="group">
@@ -42,6 +47,7 @@
         </div>
         <div class="canvas-wrapper">
           <canvas id="orig" width="640" height="480"></canvas>
+          <canvas id="overlay" aria-hidden="true"></canvas>
         </div>
       </section>
 
@@ -75,7 +81,7 @@
         <div><dt>Output</dt><dd id="outputSize">1280×960</dd></div>
         <div><dt>.bin size</dt><dd id="binSize">0 B</dd></div>
       </dl>
-      <p class="status" id="statusText" role="status">Ready. Open an image to start.</p>
+      <p class="status" id="statusText" role="status">Ready. Add images to start; click one to select it, then use the tools.</p>
     </footer>
 
     <!-- Crop modal -->
@@ -90,7 +96,7 @@
           <canvas id="cropCanvas"></canvas>
         </div>
         <div class="modal-foot">
-          <span class="hint">Drag on the image to select an area.</span>
+          <span class="hint">Drag on the image to select the area to keep.</span>
           <button class="btn" id="cropCancel2">Cancel</button>
           <button class="btn primary" id="cropConfirm">Apply</button>
         </div>
